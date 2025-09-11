@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>wbqp_controller</name>
+  <version>0.2.0</version>
+  <description>ROS 2 node that wraps MATLAB-exported Whole-Body QP and publishes base/joint commands.</description>
+
+  <maintainer email="italo.almirante@unimore.it">Italo Almirante</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <!-- Vendor with generated code -->
+  <depend>wbqp_codegen_vendor</depend>
+
+  <export/>
+</package>

@@ -1,0 +1,38 @@
+wbqp_controller:
+  ros__parameters:
+    topics:
+      joint_state: "/joint_states"                # joint state topic for the robotic arm
+      twist_cmd:   "/mobile_manipulator/cmd_vel"  # twist command topic for the whole body platform
+      cmd_vel:     "/cmd_vel"                     # command velocity topic for the mobile base
+      q_speed:     "/manipulator/js_cmd_vel"      # joint speed topic for the manipulator
+
+    control:
+      dt: 0.02                                    # control period
+
+    qp:
+      cols: [1,2,3,4,5,6,7,8,12]                  # columns of jacobian (ignore vz, wx, wy for a planar mobile base)
+      beta_arm: 0.001                             # weight for the manipulator joints (regularization penalty, penalized less)  
+      alpha_xy: 0.002                             # weight for the base translation (penalized more)
+      alpha_yaw: 0.002                            # weight for the base rotation (penalized more)
+      w_lin: 1.0                                  # weight for the linear velocity tracking
+      w_ang: 1.0                                  # weight for the angular velocity tracking (set to 0.0 if no orientation constraints)
+      nu: 0.001                                   # weight for the slack variable (soft constraint for twist tracking)
+      max_dotq: 1.0                               # maximum joint speed (rad/s)
+      max_V: 0.2                                  # maximum linear velocity of the mobile base (m/s)
+      max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
+
+    limits:
+      qmin: [ -1.745, -0.524, -1.745, -3.142, -3.142, -3.142 ]  # joint position limits (rad) min boundaries
+      qmax: [  1.745,  0.524,  1.745,  3.142,  3.142,  3.142 ]  # joint position limits (rad) max boundaries
+      qddot_max: 1.0                              # maximum joint acceleration (rad/s^2)
+      a_lin_max: 0.2                              # maximum linear acceleration (m/s^2)
+      alpha_max: 0.2                              # maximum angular acceleration (rad/s^2)
+
+    kinematics:
+      P_N2B:     [0.187, 0.0, 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z)
+      theta_N2B: [0.0,   0.0, 0.0]                # orientation of manipulator base link in the mobile base frame (r,p,y)
+
+    frames:
+      map: "map"                                  # fixed world frame 
+      base: "base"                                # mobile base frame
+      base_link: "base_link"                      # manipulator base link frame
