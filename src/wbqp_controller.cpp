@@ -34,7 +34,7 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     #endif
 
     // Build cfg and run wbqp_init once
-    struct0_T cfg{};
+    struct10_T cfg{};
     fillCfgStruct(cfg);
     wbqp_init(&cfg, &qp_);
     qp_initialized_ = true;
@@ -139,7 +139,7 @@ void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
     }
 }
 
-void WbqpControllerNode::fillCfgStruct(struct0_T &cfg) {
+void WbqpControllerNode::fillCfgStruct(struct10_T &cfg) {
     std::memset(&cfg, 0, sizeof(cfg));
 
     // cols

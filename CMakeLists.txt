@@ -1,3 +1,5 @@
+
+# wbqp_controller/CMakeLists.txt
 cmake_minimum_required(VERSION 3.16)
 project(wbqp_controller)
 
@@ -17,41 +19,36 @@ find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
-# Vendor package with MATLAB Coder outputs
 find_package(wbqp_codegen_vendor REQUIRED)
 
-# Include dirs from this package and vendor (wbqp_init, wbqp_solve, WholeBodyJacobian)
 include_directories(
   include
 )
-
-# The vendor exports its include/ via ament_export_include_directories.
-# Consumers receive them automatically, but we can be explicit too.
-# target_include_directories will be applied to the executable below through the
-# linked interface of wbqp_init/wbqp_solve/whole_body_jacobian.
 
 add_executable(wbqp_controller
   src/wbqp_controller.cpp
 )
 
 ament_target_dependencies(wbqp_controller
-  rclcpp sensor_msgs geometry_msgs std_msgs tf2_ros
-)
-
-# Ensure vendor include directories are on the include path for this target
-target_include_directories(wbqp_controller PRIVATE
-  $<TARGET_PROPERTY:wbqp_init,INTERFACE_INCLUDE_DIRECTORIES>
-  $<TARGET_PROPERTY:wbqp_solve,INTERFACE_INCLUDE_DIRECTORIES>
-  $<TARGET_PROPERTY:whole_body_jacobian,INTERFACE_INCLUDE_DIRECTORIES>
+  rclcpp sensor_msgs geometry_msgs std_msgs tf2_ros wbqp_codegen_vendor
 )
 
 # Link the three static libraries exported by wbqp_codegen_vendor
-# Targets are provided by that package: wbqp_init, wbqp_solve, whole_body_jacobian
 # Also pulls their public include directories.
+# target_link_libraries(wbqp_controller
+#   wbqp_init
+#   wbqp_solve
+#   whole_body_jacobian
+# )
+
+# Pull include dirs from the vendor
+target_include_directories(wbqp_controller PRIVATE
+  ${wbqp_codegen_vendor_INCLUDE_DIRS}
+)
+
+# Link with full paths exported by the vendor
 target_link_libraries(wbqp_controller
-  wbqp_init
-  wbqp_solve
-  whole_body_jacobian
+  ${wbqp_codegen_vendor_LIBRARIES}
 )
 
 install(TARGETS wbqp_controller

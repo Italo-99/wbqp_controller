@@ -23,6 +23,7 @@
 #include <WholeBodyJacobian.h>
 #include <wbqp_init.h>
 #include <wbqp_solve.h>
+
 #if __has_include(<wbqp_init_initialize.h>)
   #include <wbqp_init_initialize.h>
   #define HAS_WBQP_INIT_INIT 1
@@ -70,7 +71,7 @@ private:
 
     // Builders for MATLAB inputs
     void buildIn15(double out_in1_15[15]) const; // [P_N2B(3), q(6), theta_N2B(3), theta_W2N(3)]
-    void fillCfgStruct(struct0_T &cfg);
+    void fillCfgStruct(struct10_T &cfg);
     void fillInputStruct(struct1_T &in, const double J6x12_colmajor[72]) const;
 
     // Helpers
@@ -115,7 +116,7 @@ private:
     std::vector<int> cols1based_;
 
     // MATLAB persistent config
-    struct1_T qp_{}; // output of wbqp_init
+    struct11_T qp_{}; // output of wbqp_init
     bool qp_initialized_ = false;
 
     // ROS I/O
