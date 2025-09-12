@@ -5,6 +5,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/static_transform_broadcaster.h>
@@ -38,6 +39,10 @@ private:
     void twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr msg);
     void loopStep();
 
+    // Services
+    void onEnableQp(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                         std::shared_ptr<std_srvs::srv::SetBool::Response> response);
+
     // Builders for MATLAB inputs
     void buildIn15(double out_in1_15[15]) const; // [P_N2B(3), q(6), theta_N2B(3), theta_W2N(3)]
     void fillCfgStruct(struct10_T &cfg);
@@ -45,7 +50,7 @@ private:
 
     // Helpers
     static void reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
-                                     const std::vector<int> &cols1based,
+                                     const std::vector<int>& cols1based,
                                      double J6x9_colmajor[54]);
     void publishOutputs(const double x_opt[9]);
 
@@ -84,6 +89,7 @@ private:
     double u_star_[6]       = {0,0,0,0,0,0};
     bool have_js_           = false;
     bool have_twist_        = false;
+    bool qp_enabled_        = false;
 
     // Column mapping (1-based)
     std::vector<int> cols1based_;
@@ -100,6 +106,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_base_pose_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
+    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr qp_switch_srv_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     // Executor & spinner time measurement

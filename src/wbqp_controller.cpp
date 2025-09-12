@@ -24,13 +24,13 @@
 
 #include "wbqp_controller/wbqp_controller.hpp"
 
-using std::placeholders::_1;
-
+// ------------------- CONSTRUCTOR & DESTRUCTOR ------------------- //
 WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
-: rclcpp::Node("wbqp_controller", options) {
+: rclcpp::Node("wbqp_controller", options)
+{
     // --- Params ---
     topic_joint_state_ = this->declare_parameter<std::string>("topics.joint_state", "/joint_states");
-    topic_twist_cmd_   = this->declare_parameter<std::string>("topics.twist_cmd",   "/ee_twist_cmd");
+    topic_twist_cmd_   = this->declare_parameter<std::string>("topics.twist_cmd",   "/mobile_manipulator/cmd_vel");
     topic_cmd_vel_     = this->declare_parameter<std::string>("topics.cmd_vel",     "/cmd_vel");
     topic_q_speed_     = this->declare_parameter<std::string>("topics.q_speed",     "/manipulator/js_cmd_vel");
     dt_                = this->declare_parameter<double>("control.dt", 0.02);
@@ -55,11 +55,11 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     // ROS I/O
     sub_js_ = this->create_subscription<sensor_msgs::msg::JointState>(
         topic_joint_state_, rclcpp::SensorDataQoS(),
-        std::bind(&WbqpControllerNode::jointStateCb, this, _1));
+        std::bind(&WbqpControllerNode::jointStateCb, this, std::placeholders::_1));
 
     sub_twist_ = this->create_subscription<geometry_msgs::msg::Twist>(
         topic_twist_cmd_, 10,
-        std::bind(&WbqpControllerNode::twistCmdCb, this, _1));
+        std::bind(&WbqpControllerNode::twistCmdCb, this, std::placeholders::_1));
 
     pub_cmd_vel_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_cmd_vel_, 1);
     pub_q_speed_  = this->create_publisher<sensor_msgs::msg::JointState>(topic_q_speed_, 1);
@@ -67,6 +67,11 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
     pub_base_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/base_pose", 1);
+
+    qp_switch_srv_ = this->create_service<std_srvs::srv::SetBool>(
+            "~/enable_qp",
+            std::bind(&WbqpControllerNode::onEnableQp, this,
+                      std::placeholders::_1, std::placeholders::_2));
 
     // Publish static TF base -> base_link once
     publishStaticBaseToBaseLink();
@@ -77,37 +82,12 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     );
 }
 
-WbqpControllerNode::~WbqpControllerNode() {
-    // Optional MATLAB terminate calls
-    #ifdef HAS_WBQP_SOLVE_TERM
-      wbqp_solve_terminate();
-    #endif
-    #ifdef HAS_WBQP_INIT_TERM
-      wbqp_init_terminate();
-    #endif
-    #ifdef HAS_WBJ_TERM
-      WholeBodyJacobian_terminate();
-    #endif
-}
+WbqpControllerNode::~WbqpControllerNode(){}
 
-void WbqpControllerNode::jointStateCb(const sensor_msgs::msg::JointState::SharedPtr msg) {
-    if (msg->position.size() >= 6) {
-        for (int i=0;i<6;++i) { q_pos_[i] = msg->position[i]; }
-    }
-    if (msg->velocity.size() >= 6) {
-        for (int i=0;i<6;++i) { q_vel_[i] = msg->velocity[i]; }
-    }
-    have_js_ = true;
-}
-
-void WbqpControllerNode::twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr msg) {
-    u_star_[0]=msg->linear.x;  u_star_[1]=msg->linear.y;  u_star_[2]=msg->linear.z;
-    u_star_[3]=msg->angular.x; u_star_[4]=msg->angular.y; u_star_[5]=msg->angular.z;
-    have_twist_ = true;
-}
-
-void WbqpControllerNode::loopStep() {
-    if (!qp_initialized_ || !have_js_ || !have_twist_) { return; }
+// ------------------- MAIN LOOP ------------------- //
+void WbqpControllerNode::loopStep()
+{
+    if (!qp_initialized_ || !have_js_ || !have_twist_ || !qp_enabled_) { return; }
 
     // 1) Build WBJ input and compute 6x12 Jacobian (column-major)
     double in1[15];
@@ -134,25 +114,37 @@ void WbqpControllerNode::loopStep() {
     publishOutputs(x_opt);
 }
 
-void WbqpControllerNode::buildIn15(double out_in1_15[15]) const {
-    out_in1_15[0]=P_N2B_[0]; out_in1_15[1]=P_N2B_[1]; out_in1_15[2]=P_N2B_[2];
-    for (int i=0;i<6;++i){ out_in1_15[3+i] = q_pos_[i]; }
-    out_in1_15[9]=theta_N2B_[0]; out_in1_15[10]=theta_N2B_[1]; out_in1_15[11]=theta_N2B_[2];
-    out_in1_15[12]=theta_W2N_[0]; out_in1_15[13]=theta_W2N_[1]; out_in1_15[14]=theta_W2N_[2];
-}
-
-void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
-                                              const std::vector<int> &cols1based,
-                                              double J6x9_colmajor[54]) {
-    for (int j=0;j<9;++j) {
-        int src_c = cols1based[j] - 1;
-        for (int r=0;r<6;++r) {
-            J6x9_colmajor[r + 6*j] = J6x12_colmajor[r + 6*src_c];
-        }
+// ------------------- CALLBACKS ------------------- //
+void WbqpControllerNode::jointStateCb(const sensor_msgs::msg::JointState::SharedPtr msg)
+{
+    if (msg->position.size() >= 6) {
+        for (int i=0;i<6;++i) { q_pos_[i] = msg->position[i]; }
     }
+    if (msg->velocity.size() >= 6) {
+        for (int i=0;i<6;++i) { q_vel_[i] = msg->velocity[i]; }
+    }
+    have_js_ = true;
 }
 
-void WbqpControllerNode::fillCfgStruct(struct10_T &cfg) {
+void WbqpControllerNode::twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr msg)
+{
+    u_star_[0]=msg->linear.x;  u_star_[1]=msg->linear.y;  u_star_[2]=msg->linear.z;
+    u_star_[3]=msg->angular.x; u_star_[4]=msg->angular.y; u_star_[5]=msg->angular.z;
+    have_twist_ = true;
+}
+
+void WbqpControllerNode::onEnableQp(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                                         std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+{
+    qp_enabled_ = request->data;   // true = enable, false = disable
+    response->success = true;
+    response->message = qp_enabled_ ? "QP enabled" : "QP disabled";
+    RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+}
+
+// ------------------- OPTIMIZER CONFIGURATION ------------------- //
+void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
+{
     std::memset(&cfg, 0, sizeof(cfg));
 
     // cols
@@ -178,7 +170,8 @@ void WbqpControllerNode::fillCfgStruct(struct10_T &cfg) {
     cfg.alpha_max  = this->get_parameter("limits.alpha_max").get_value<double>();
 }
 
-void WbqpControllerNode::fillInputStruct(struct1_T &in, const double J6x12_colmajor[72]) const {
+void WbqpControllerNode::fillInputStruct(struct1_T &in, const double J6x12_colmajor[72]) const
+{
     std::memset(&in, 0, sizeof(in));
 
     // Provide reduced J (6x9) if your generated struct expects field 'J'
@@ -192,9 +185,25 @@ void WbqpControllerNode::fillInputStruct(struct1_T &in, const double J6x12_colma
     in.dt = dt_;
 }
 
+void WbqpControllerNode::buildIn15(double out_in1_15[15]) const
+{
+    out_in1_15[0]=P_N2B_[0]; out_in1_15[1]=P_N2B_[1]; out_in1_15[2]=P_N2B_[2];
+    for (int i=0;i<6;++i){ out_in1_15[3+i] = q_pos_[i]; }
+    out_in1_15[9]=theta_N2B_[0]; out_in1_15[10]=theta_N2B_[1]; out_in1_15[11]=theta_N2B_[2];
+    out_in1_15[12]=theta_W2N_[0]; out_in1_15[13]=theta_W2N_[1]; out_in1_15[14]=theta_W2N_[2];
+}
 
-
-// QUI SOTTO HO FATTO E SONO SICURO AL 100% CHE VA BENE
+void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
+                                              const std::vector<int>& cols1based,
+                                              double J6x9_colmajor[54])
+{
+    for (int j=0;j<9;++j) {
+        int src_c = cols1based[j] - 1;
+        for (int r=0;r<6;++r) {
+            J6x9_colmajor[r + 6*j] = J6x12_colmajor[r + 6*src_c];
+        }
+    }
+}
 
 // ----------------- MOBILE BASE ODOMETRY (TODO: test orientation integration) ----------------------- //
 void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9])

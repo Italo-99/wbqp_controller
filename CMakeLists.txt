@@ -1,5 +1,3 @@
-
-# wbqp_controller/CMakeLists.txt
 cmake_minimum_required(VERSION 3.16)
 project(wbqp_controller)
 
@@ -16,6 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -25,21 +24,23 @@ include_directories(
   include
 )
 
+# Install controller executable
 add_executable(wbqp_controller
   src/wbqp_controller.cpp
 )
 
 ament_target_dependencies(wbqp_controller
-  rclcpp sensor_msgs geometry_msgs std_msgs tf2_ros wbqp_codegen_vendor
+  rclcpp sensor_msgs geometry_msgs std_msgs std_srvs tf2_ros wbqp_codegen_vendor
 )
 
-# Link the three static libraries exported by wbqp_codegen_vendor
-# Also pulls their public include directories.
-# target_link_libraries(wbqp_controller
-#   wbqp_init
-#   wbqp_solve
-#   whole_body_jacobian
-# )
+# --- Menu node target ---
+add_executable(wbqp_menu
+  src/wbqp_menu.cpp
+)
+ament_target_dependencies(wbqp_menu
+  rclcpp
+  std_srvs
+)
 
 # Pull include dirs from the vendor
 target_include_directories(wbqp_controller PRIVATE
@@ -51,16 +52,18 @@ target_link_libraries(wbqp_controller
   ${wbqp_codegen_vendor_LIBRARIES}
 )
 
-install(TARGETS wbqp_controller
+# Install targets
+install(TARGETS wbqp_controller wbqp_menu
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install headers
 install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY config launch
-  DESTINATION share/${PROJECT_NAME}
-)
+# Install launch + config
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 ament_package()
