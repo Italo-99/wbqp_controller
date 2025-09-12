@@ -29,22 +29,7 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("wbqp_controller", options)
 {
     // --- Params ---
-    topic_joint_state_ = this->declare_parameter<std::string>("topics.joint_state", "/joint_states");
-    topic_twist_cmd_   = this->declare_parameter<std::string>("topics.twist_cmd",   "/mobile_manipulator/cmd_vel");
-    topic_cmd_vel_     = this->declare_parameter<std::string>("topics.cmd_vel",     "/cmd_vel");
-    topic_q_speed_     = this->declare_parameter<std::string>("topics.q_speed",     "/manipulator/js_cmd_vel");
-    dt_                = this->declare_parameter<double>("control.dt", 0.02);
-
-    auto cols_param = this->declare_parameter<std::vector<int64_t>>("qp.cols", {1,2,3,4,5,6,7,8,12});
-    cols1based_.assign(cols_param.begin(), cols_param.end());
-
-    auto p_n2b = this->declare_parameter<std::vector<double>>("kinematics.P_N2B", {0.187, 0.0, 0.22});
-    auto th_n2b = this->declare_parameter<std::vector<double>>("kinematics.theta_N2B", {0.0, 0.0, 0.0});
-    for (int i=0;i<3;++i){ P_N2B_[i] = p_n2b[i]; theta_N2B_[i] = th_n2b[i]; }
-
-    map_frame_       = this->declare_parameter<std::string>("frames.map", "map");
-    base_frame_      = this->declare_parameter<std::string>("frames.base", "base");
-    base_link_frame_ = this->declare_parameter<std::string>("frames.base_link", "base_link");
+    check_params();
 
     // Build cfg and run wbqp_init once
     struct10_T cfg{};
@@ -52,26 +37,30 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     wbqp_init(&cfg, &qp_);
     qp_initialized_ = true;
 
-    // ROS I/O
-    sub_js_ = this->create_subscription<sensor_msgs::msg::JointState>(
-        topic_joint_state_, rclcpp::SensorDataQoS(),
-        std::bind(&WbqpControllerNode::jointStateCb, this, std::placeholders::_1));
+    print_params(cfg);
 
+    // ROS I/O
+    rclcpp::SubscriptionOptions sub_options;
+
+    auto cb_group_sub_js = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    sub_options.callback_group = cb_group_sub_js;
+    sub_js_ = this->create_subscription<sensor_msgs::msg::JointState>(
+        topic_joint_state_, 1, std::bind(&WbqpControllerNode::jointStateCb, this, std::placeholders::_1), sub_options);
+
+    auto cb_group_sub_twist = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    sub_options.callback_group = cb_group_sub_twist;
     sub_twist_ = this->create_subscription<geometry_msgs::msg::Twist>(
-        topic_twist_cmd_, 10,
-        std::bind(&WbqpControllerNode::twistCmdCb, this, std::placeholders::_1));
+        topic_twist_cmd_, 1, std::bind(&WbqpControllerNode::twistCmdCb, this, std::placeholders::_1), sub_options);
 
     pub_cmd_vel_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_cmd_vel_, 1);
     pub_q_speed_  = this->create_publisher<sensor_msgs::msg::JointState>(topic_q_speed_, 1);
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
-    pub_base_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/base_pose", 1);
+    pub_base_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/mobile_manipulator/base_pose", 1);
 
-    qp_switch_srv_ = this->create_service<std_srvs::srv::SetBool>(
-            "~/enable_qp",
-            std::bind(&WbqpControllerNode::onEnableQp, this,
-                      std::placeholders::_1, std::placeholders::_2));
+    qp_switch_srv_ = this->create_service<std_srvs::srv::SetBool>("~/enable_qp",
+            std::bind(&WbqpControllerNode::onEnableQp, this, std::placeholders::_1, std::placeholders::_2));
 
     // Publish static TF base -> base_link once
     publishStaticBaseToBaseLink();
@@ -84,10 +73,124 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
 
 WbqpControllerNode::~WbqpControllerNode(){}
 
+void::WbqpControllerNode::check_params()
+{
+  // --- Topics & timing ---
+  this->declare_parameter("topics.joint_state", "/joint_states");
+  this->declare_parameter("topics.twist_cmd",   "/mobile_manipulator/cmd_vel");
+  this->declare_parameter("topics.cmd_vel",     "/cmd_vel");
+  this->declare_parameter("topics.q_speed",     "/manipulator/js_cmd_vel");
+  this->declare_parameter("control.dt",          0.02);
+
+  topic_joint_state_ = this->get_parameter("topics.joint_state").as_string();
+  topic_twist_cmd_   = this->get_parameter("topics.twist_cmd").as_string();
+  topic_cmd_vel_     = this->get_parameter("topics.cmd_vel").as_string();
+  topic_q_speed_     = this->get_parameter("topics.q_speed").as_string();
+  dt_                = this->get_parameter("control.dt").as_double();
+
+  // --- Frames ---
+  this->declare_parameter("frames.map",       "map");
+  this->declare_parameter("frames.base",      "base");
+  this->declare_parameter("frames.base_link", "base_link");
+  map_frame_       = this->get_parameter("frames.map").as_string();
+  base_frame_      = this->get_parameter("frames.base").as_string();
+  base_link_frame_ = this->get_parameter("frames.base_link").as_string();
+
+  // --- Solver column selection (1-based) ---
+  this->declare_parameter("qp.cols", std::vector<int64_t>{1,2,3,4,5,6,7,8,12});
+  auto cols_i64 = this->get_parameter("qp.cols").as_integer_array();
+  cols1based_.resize(cols_i64.size());
+  std::transform(cols_i64.begin(), cols_i64.end(), cols1based_.begin(),
+                 [](int64_t v){ return static_cast<int>(v); });
+
+  // --- Robot fixed transform N->B ---
+  this->declare_parameter("kinematics.P_N2B",     std::vector<double>{0.187, 0.0, 0.22});
+  this->declare_parameter("kinematics.theta_N2B", std::vector<double>{0.0,   0.0,  0.0});
+  auto p_n2b  = this->get_parameter("kinematics.P_N2B").as_double_array();
+  auto th_n2b = this->get_parameter("kinematics.theta_N2B").as_double_array();
+  for (int i=0;i<3;++i) { P_N2B_[i] = p_n2b[i]; theta_N2B_[i] = th_n2b[i]; }
+
+  RCLCPP_INFO(this->get_logger(), "Parameters loaded.");
+}
+
+void WbqpControllerNode::print_params(const struct10_T &cfg)
+{
+    RCLCPP_INFO(this->get_logger(), "--- Loaded Parameters ---");
+
+    // --- Topics & timing ---
+    RCLCPP_INFO(this->get_logger(), "Topics:");
+    RCLCPP_INFO(this->get_logger(), "  joint_state : %s", topic_joint_state_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  twist_cmd   : %s", topic_twist_cmd_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  cmd_vel     : %s", topic_cmd_vel_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  q_speed     : %s", topic_q_speed_.c_str());
+    RCLCPP_INFO(this->get_logger(), "Control dt = %.4f", dt_);
+
+    // --- Frames ---
+    RCLCPP_INFO(this->get_logger(), "Frames:");
+    RCLCPP_INFO(this->get_logger(), "  map       : %s", map_frame_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  base      : %s", base_frame_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  base_link : %s", base_link_frame_.c_str());
+
+    // --- Transform ---
+    RCLCPP_INFO(this->get_logger(), "P_N2B     = [%.3f, %.3f, %.3f]",
+                P_N2B_[0], P_N2B_[1], P_N2B_[2]);
+    RCLCPP_INFO(this->get_logger(), "theta_N2B = [%.3f, %.3f, %.3f]",
+                theta_N2B_[0], theta_N2B_[1], theta_N2B_[2]);
+
+    // --- Solver columns ---
+    std::ostringstream cols_ss;
+    cols_ss << "[";
+    for (size_t i=0; i<cols1based_.size(); ++i) {
+        cols_ss << cols1based_[i];
+        if (i+1 < cols1based_.size()) { cols_ss << ", "; }
+    }
+    cols_ss << "]";
+    RCLCPP_INFO(this->get_logger(), "QP cols = %s", cols_ss.str().c_str());
+
+    // --- QP weights & limits ---
+    RCLCPP_INFO(this->get_logger(), "QP Parameters:");
+    RCLCPP_INFO(this->get_logger(), "  beta_arm   = %.4f", cfg.beta_arm);
+    RCLCPP_INFO(this->get_logger(), "  alpha_xy   = %.4f", cfg.alpha_xy);
+    RCLCPP_INFO(this->get_logger(), "  alpha_yaw  = %.4f", cfg.alpha_yaw);
+    RCLCPP_INFO(this->get_logger(), "  w_lin      = %.4f", cfg.w_lin);
+    RCLCPP_INFO(this->get_logger(), "  w_ang      = %.4f", cfg.w_ang);
+    RCLCPP_INFO(this->get_logger(), "  nu         = %.4f", cfg.nu);
+    RCLCPP_INFO(this->get_logger(), "  max_dotq   = %.4f", cfg.max_dotq);
+    RCLCPP_INFO(this->get_logger(), "  max_V      = %.4f", cfg.max_V);
+    RCLCPP_INFO(this->get_logger(), "  max_Omegaz = %.4f", cfg.max_Omegaz);
+    RCLCPP_INFO(this->get_logger(), "  qddot_max  = %.4f", cfg.qddot_max);
+    RCLCPP_INFO(this->get_logger(), "  a_lin_max  = %.4f", cfg.a_lin_max);
+    RCLCPP_INFO(this->get_logger(), "  alpha_max  = %.4f", cfg.alpha_max);
+
+    // --- Joint limits ---
+    std::ostringstream qmin_ss, qmax_ss;
+    qmin_ss << "[";
+    qmax_ss << "[";
+    for (int i=0; i<6; ++i) {
+        qmin_ss << cfg.qmin[i];
+        qmax_ss << cfg.qmax[i];
+        if (i<5) { qmin_ss << ", "; qmax_ss << ", "; }
+    }
+    qmin_ss << "]";
+    qmax_ss << "]";
+    RCLCPP_INFO(this->get_logger(), "qmin = %s", qmin_ss.str().c_str());
+    RCLCPP_INFO(this->get_logger(), "qmax = %s", qmax_ss.str().c_str());
+
+    RCLCPP_INFO(this->get_logger(), "--------------------------");
+}
+
 // ------------------- MAIN LOOP ------------------- //
 void WbqpControllerNode::loopStep()
 {
-    if (!qp_initialized_ || !have_js_ || !have_twist_ || !qp_enabled_) { return; }
+    // Publish static TF base -> base_link
+    static_tf_broadcaster_->sendTransform(tf_N2B_);
+
+    if (!qp_initialized_ || !have_js_ || !have_twist_ || !qp_enabled_)
+    {
+        // Publish base pose and TF even if QP is not running
+        publishBaseState(); 
+        return;
+    }
 
     // 1) Build WBJ input and compute 6x12 Jacobian (column-major)
     double in1[15];
@@ -150,24 +253,39 @@ void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
     // cols
     for (int i=0;i<9 && i<(int)cols1based_.size(); ++i) { cfg.cols[i] = static_cast<int>(cols1based_[i]); }
 
-    // Pull scalar params (with defaults from declare_parameter)
-    cfg.beta_arm   = this->get_parameter("qp.beta_arm").get_value<double>();
-    cfg.alpha_xy   = this->get_parameter("qp.alpha_xy").get_value<double>();
-    cfg.alpha_yaw  = this->get_parameter("qp.alpha_yaw").get_value<double>();
-    cfg.w_lin      = this->get_parameter("qp.w_lin").get_value<double>();
-    cfg.w_ang      = this->get_parameter("qp.w_ang").get_value<double>();
-    cfg.nu         = this->get_parameter("qp.nu").get_value<double>();
-    cfg.max_dotq   = this->get_parameter("qp.max_dotq").get_value<double>();
-    cfg.max_V      = this->get_parameter("qp.max_V").get_value<double>();
-    cfg.max_Omegaz = this->get_parameter("qp.max_Omegaz").get_value<double>();
+    // --- QP weights & limits (scalars) ---
+    this->declare_parameter("qp.beta_arm",   0.001);
+    this->declare_parameter("qp.alpha_xy",   0.001);
+    this->declare_parameter("qp.alpha_yaw",  0.001);
+    this->declare_parameter("qp.w_lin",      1.0);
+    this->declare_parameter("qp.w_ang",      1.0);
+    this->declare_parameter("qp.nu",         0.001);
+    this->declare_parameter("qp.max_dotq",   1.0);
+    this->declare_parameter("qp.max_V",      0.5);
+    this->declare_parameter("qp.max_Omegaz", 0.5);
+    this->declare_parameter("qp.qddot_max",  2.0);
+    this->declare_parameter("qp.a_lin_max",  1.0);
+    this->declare_parameter("qp.alpha_max",  1.0);
 
+    cfg.beta_arm   = this->get_parameter("qp.beta_arm").as_double();
+    cfg.alpha_xy   = this->get_parameter("qp.alpha_xy").as_double();
+    cfg.alpha_yaw  = this->get_parameter("qp.alpha_yaw").as_double();
+    cfg.w_lin      = this->get_parameter("qp.w_lin").as_double();
+    cfg.w_ang      = this->get_parameter("qp.w_ang").as_double();
+    cfg.nu         = this->get_parameter("qp.nu").as_double();
+    cfg.max_dotq   = this->get_parameter("qp.max_dotq").as_double();
+    cfg.max_V      = this->get_parameter("qp.max_V").as_double();
+    cfg.max_Omegaz = this->get_parameter("qp.max_Omegaz").as_double();
+    cfg.qddot_max  = this->get_parameter("qp.qddot_max").as_double();
+    cfg.a_lin_max  = this->get_parameter("qp.a_lin_max").as_double();
+    cfg.alpha_max  = this->get_parameter("qp.alpha_max").as_double();
+
+    // --- Joint limits arrays ---
+    this->declare_parameter("limits.qmin", std::vector<double>{-3.14,-3.14,-3.14,-3.14,-3.14,-3.14});
+    this->declare_parameter("limits.qmax", std::vector<double>{ 3.14, 3.14, 3.14, 3.14, 3.14, 3.14});
     auto qmin = this->get_parameter("limits.qmin").as_double_array();
     auto qmax = this->get_parameter("limits.qmax").as_double_array();
     for (int i=0;i<6;++i) { cfg.qmin[i] = qmin[i]; cfg.qmax[i] = qmax[i]; }
-
-    cfg.qddot_max  = this->get_parameter("limits.qddot_max").get_value<double>();
-    cfg.a_lin_max  = this->get_parameter("limits.a_lin_max").get_value<double>();
-    cfg.alpha_max  = this->get_parameter("limits.alpha_max").get_value<double>();
 }
 
 void WbqpControllerNode::fillInputStruct(struct1_T &in, const double J6x12_colmajor[72]) const
@@ -227,29 +345,30 @@ void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9])
     // y_base_       += Vy_b * dt_;
     theta_W2N_[2] += wz   * dt_;
 
+    // Publish results
+    publishBaseState();
+}
+
+void WbqpControllerNode::publishBaseState()
+{
     // Publish base pose
-    geometry_msgs::msg::PoseStamped ps;
-    ps.header.stamp = this->get_clock()->now();
-    ps.header.frame_id = map_frame_;
-    ps.pose.position.x = x_base_;
-    ps.pose.position.y = y_base_;
-    ps.pose.position.z = 0.0;
-    ps.pose.orientation = quatFromRPY(0.0, 0.0, theta_W2N_[2]);
-    pub_base_pose_->publish(ps);
+    base_pose_.header.stamp     = this->get_clock()->now();
+    base_pose_.header.frame_id  = map_frame_;
+    base_pose_.pose.position.x  = x_base_;
+    base_pose_.pose.position.y  = y_base_;
+    base_pose_.pose.position.z  = 0.0;
+    base_pose_.pose.orientation = quatFromRPY(0.0, 0.0, theta_W2N_[2]);
+    pub_base_pose_->publish(base_pose_);
 
     // Publish TF map -> base
-    geometry_msgs::msg::TransformStamped tf;
-    tf.header.stamp = ps.header.stamp;
-    tf.header.frame_id = map_frame_;
-    tf.child_frame_id  = base_frame_;
-    tf.transform.translation.x = x_base_;
-    tf.transform.translation.y = y_base_;
-    tf.transform.translation.z = 0.0;
-    tf.transform.rotation = ps.pose.orientation;
-    tf_broadcaster_->sendTransform(tf);
-
-    // Publish static TF base -> base_link once
-    static_tf_broadcaster_->sendTransform(tf_N2B_);
+    map_base_tf_.header.stamp               = base_pose_.header.stamp;
+    map_base_tf_.header.frame_id            = map_frame_;
+    map_base_tf_.child_frame_id             = base_frame_;
+    map_base_tf_.transform.translation.x    = x_base_;
+    map_base_tf_.transform.translation.y    = y_base_;
+    map_base_tf_.transform.translation.z    = 0.0;
+    map_base_tf_.transform.rotation         = base_pose_.pose.orientation;
+    tf_broadcaster_->sendTransform(map_base_tf_);
 }
 
 // ---------------------------- HELPERS ---------------------------- //

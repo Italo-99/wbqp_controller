@@ -56,10 +56,13 @@ private:
 
     // Pose integration + TF
     void integrateAndPublishBase(const double x_opt[9]);
+    void publishBaseState();
     void publishStaticBaseToBaseLink();
     static geometry_msgs::msg::Quaternion quatFromRPY(double r, double p, double y);
 
-    // Shutdown handler
+    // Config handlers
+    void check_params();
+    void print_params(const struct10_T &cfg);
     void shutdown_handler();
 
     // Params / topics
@@ -90,6 +93,8 @@ private:
     bool have_js_           = false;
     bool have_twist_        = false;
     bool qp_enabled_        = false;
+    geometry_msgs::msg::PoseStamped base_pose_;
+    geometry_msgs::msg::TransformStamped map_base_tf_;
 
     // Column mapping (1-based)
     std::vector<int> cols1based_;

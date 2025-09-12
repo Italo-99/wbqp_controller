@@ -10,17 +10,14 @@ public:
     WbqpMenuNode()
     : rclcpp::Node("wbqp_menu")
     {
-        // Allow remapping of service name via parameter if needed
-        declare_parameter<std::string>("service_name", "/enable_qp");
+        declare_parameter<std::string>("service_name", "/wbqp_controller/enable_qp");
         service_name_ = get_parameter("service_name").as_string();
-
         client_ = this->create_client<std_srvs::srv::SetBool>(service_name_);
-
-        runMenu();
     }
 
-private:
+    void run() { runMenu(); } // public entry point
 
+private:
     void printMenu()
     {
         std::cout << "\n=== WBQP MENU ===\n"
@@ -56,16 +53,17 @@ private:
             req->data = enable;
 
             auto future = client_->async_send_request(req);
-            if (rclcpp::spin_until_future_complete(shared_from_this(), future) !=
-                rclcpp::FutureReturnCode::SUCCESS)
+
+            // SAFE now: object is fully managed by a shared_ptr
+            if (rclcpp::spin_until_future_complete(this->shared_from_this(), future)
+                != rclcpp::FutureReturnCode::SUCCESS)
             {
                 std::cout << "Service call failed.\n";
                 continue;
             }
 
             auto resp = future.get();
-            std::cout << (resp->success ? "[OK] " : "[ERR] ")
-                      << resp->message << "\n";
+            std::cout << (resp->success ? "[OK] " : "[ERR] ") << resp->message << "\n";
         }
     }
 
@@ -78,6 +76,7 @@ int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<WbqpMenuNode>();
+    node->run();                   // <-- run after construction
     rclcpp::shutdown();
     return 0;
 }
