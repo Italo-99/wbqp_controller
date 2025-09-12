@@ -24,44 +24,13 @@
 #include <wbqp_init.h>
 #include <wbqp_solve.h>
 
-#if __has_include(<wbqp_init_initialize.h>)
-  #include <wbqp_init_initialize.h>
-  #define HAS_WBQP_INIT_INIT 1
-#endif
-#if __has_include(<wbqp_init_terminate.h>)
-  #include <wbqp_init_terminate.h>
-  #define HAS_WBQP_INIT_TERM 1
-#endif
-#if __has_include(<wbqp_solve_initialize.h>)
-  #include <wbqp_solve_initialize.h>
-  #define HAS_WBQP_SOLVE_INIT 1
-#endif
-#if __has_include(<wbqp_solve_terminate.h>)
-  #include <wbqp_solve_terminate.h>
-  #define HAS_WBQP_SOLVE_TERM 1
-#endif
-#if __has_include(<WholeBodyJacobian_initialize.h>)
-  #include <WholeBodyJacobian_initialize.h>
-  #define HAS_WBJ_INIT 1
-#endif
-#if __has_include(<WholeBodyJacobian_terminate.h>)
-  #include <WholeBodyJacobian_terminate.h>
-  #define HAS_WBJ_TERM 1
-#endif
-
-// Types headers (optional, only if you need struct0_T/struct1_T/struct2_T definitions)
-#if __has_include(<wbqp_init_types.h>)
-  #include <wbqp_init_types.h>
-#elif __has_include(<wbqp_solve_types.h>)
-  #include <wbqp_solve_types.h>
-#else
-  // If types are not in separate headers, they are usually in main headers above.
-#endif
-
 class WbqpControllerNode : public rclcpp::Node {
 public:
     explicit WbqpControllerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
     ~WbqpControllerNode();
+
+    // Spinner
+    void spinner();
 
 private:
     // Callbacks
@@ -85,6 +54,9 @@ private:
     void publishStaticBaseToBaseLink();
     static geometry_msgs::msg::Quaternion quatFromRPY(double r, double p, double y);
 
+    // Shutdown handler
+    void shutdown_handler();
+
     // Params / topics
     std::string topic_joint_state_;
     std::string topic_twist_cmd_;
@@ -102,6 +74,7 @@ private:
     // Kinematics for WBJ
     double P_N2B_[3];
     double theta_N2B_[3];
+    geometry_msgs::msg::TransformStamped tf_N2B_;
 
     // State
     double q_pos_[6]        = {0,0,0,0,0,0};
@@ -123,9 +96,14 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_js_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_twist_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_q_speed_;
+    rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_q_speed_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_base_pose_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     rclcpp::TimerBase::SharedPtr timer_;
+
+    // Executor & spinner time measurement
+    rclcpp::executors::MultiThreadedExecutor executor_;
+  	double spinner_mean_ = 0.0; 			        // Mean time for the spinner loop
+  	unsigned long long int num_samples_ = 0;  // Number of samples for the mean time calculation
 };

@@ -1,3 +1,27 @@
+/*
+	MIT License
+
+	Copyright (c) [2024] [Andrea Pupa] [Italo Almirante]
+
+	Permission is hereby granted, free of charge, to any person obtaining a copy
+	of this software and associated documentation files (the "Software"), to deal
+	in the Software without restriction, including without limitation the rights
+	to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+	copies of the Software, and to permit persons to whom the Software is
+	furnished to do so, subject to the following conditions:
+
+	The above copyright notice and this permission notice shall be included in all
+	copies or substantial portions of the Software.
+
+	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+	AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+	LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+	OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+	SOFTWARE.
+*/
+
 #include "wbqp_controller/wbqp_controller.hpp"
 
 using std::placeholders::_1;
@@ -22,17 +46,6 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     base_frame_      = this->declare_parameter<std::string>("frames.base", "base");
     base_link_frame_ = this->declare_parameter<std::string>("frames.base_link", "base_link");
 
-    // Optional MATLAB init calls
-    #ifdef HAS_WBJ_INIT
-      WholeBodyJacobian_initialize();
-    #endif
-    #ifdef HAS_WBQP_INIT_INIT
-      wbqp_init_initialize();
-    #endif
-    #ifdef HAS_WBQP_SOLVE_INIT
-      wbqp_solve_initialize();
-    #endif
-
     // Build cfg and run wbqp_init once
     struct10_T cfg{};
     fillCfgStruct(cfg);
@@ -48,20 +61,20 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
         topic_twist_cmd_, 10,
         std::bind(&WbqpControllerNode::twistCmdCb, this, _1));
 
-    pub_cmd_vel_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_cmd_vel_, 10);
-    pub_q_speed_  = this->create_publisher<std_msgs::msg::Float64MultiArray>(topic_q_speed_, 10);
+    pub_cmd_vel_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_cmd_vel_, 1);
+    pub_q_speed_  = this->create_publisher<sensor_msgs::msg::JointState>(topic_q_speed_, 1);
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
-    pub_base_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/base_pose", 10);
+    pub_base_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/base_pose", 1);
 
     // Publish static TF base -> base_link once
     publishStaticBaseToBaseLink();
 
-    // Loop timer
-    timer_ = this->create_wall_timer(
-        std::chrono::duration<double>(dt_),
-        std::bind(&WbqpControllerNode::loopStep, this));
+    // ---------------- SHUTDOWN HANDLER ----------------
+    rclcpp::contexts::get_global_default_context()->add_pre_shutdown_callback(
+        std::bind(&WbqpControllerNode::shutdown_handler, this) // Register shutdown handler
+    );
 }
 
 WbqpControllerNode::~WbqpControllerNode() {
@@ -179,38 +192,14 @@ void WbqpControllerNode::fillInputStruct(struct1_T &in, const double J6x12_colma
     in.dt = dt_;
 }
 
-void WbqpControllerNode::publishOutputs(const double x_opt[9]) {
-    geometry_msgs::msg::Twist base;
-    base.linear.x  = x_opt[6];
-    base.linear.y  = x_opt[7];
-    base.angular.z = x_opt[8];
-    pub_cmd_vel_->publish(base);
 
-    std_msgs::msg::Float64MultiArray qspd;
-    qspd.data.resize(6);
-    for (int i=0;i<6;++i) { qspd.data[i] = x_opt[i]; }
-    pub_q_speed_->publish(qspd);
-}
 
-geometry_msgs::msg::Quaternion WbqpControllerNode::quatFromRPY(double r, double p, double y) {
-    tf2::Quaternion q; q.setRPY(r, p, y);
-    geometry_msgs::msg::Quaternion out; out.x=q.x(); out.y=q.y(); out.z=q.z(); out.w=q.w();
-    return out;
-}
+// QUI SOTTO HO FATTO E SONO SICURO AL 100% CHE VA BENE
 
-void WbqpControllerNode::publishStaticBaseToBaseLink() {
-    geometry_msgs::msg::TransformStamped st;
-    st.header.stamp = this->get_clock()->now();
-    st.header.frame_id = base_frame_;
-    st.child_frame_id  = base_link_frame_;
-    st.transform.translation.x = P_N2B_[0];
-    st.transform.translation.y = P_N2B_[1];
-    st.transform.translation.z = P_N2B_[2];
-    st.transform.rotation = quatFromRPY(theta_N2B_[0], theta_N2B_[1], theta_N2B_[2]);
-    static_tf_broadcaster_->sendTransform(st);
-}
-
-void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9]) {
+// ----------------- MOBILE BASE ODOMETRY (TODO: test orientation integration) ----------------------- //
+void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9])
+{
+    // Extract base state
     const double Vx_b = x_opt[6];
     const double Vy_b = x_opt[7];
     const double wz   = x_opt[8];
@@ -218,13 +207,18 @@ void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9]) {
     const double c    = std::cos(th);
     const double s    = std::sin(th);
 
+    // Compute x and y velocities in world frame
     const double vx_w = c * Vx_b - s * Vy_b;
     const double vy_w = s * Vx_b + c * Vy_b;
-
     x_base_      += vx_w * dt_;
     y_base_      += vy_w * dt_;
+
+    // Update base pose
+    // x_base_       += Vx_b * dt_;
+    // y_base_       += Vy_b * dt_;
     theta_W2N_[2] += wz   * dt_;
 
+    // Publish base pose
     geometry_msgs::msg::PoseStamped ps;
     ps.header.stamp = this->get_clock()->now();
     ps.header.frame_id = map_frame_;
@@ -234,6 +228,7 @@ void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9]) {
     ps.pose.orientation = quatFromRPY(0.0, 0.0, theta_W2N_[2]);
     pub_base_pose_->publish(ps);
 
+    // Publish TF map -> base
     geometry_msgs::msg::TransformStamped tf;
     tf.header.stamp = ps.header.stamp;
     tf.header.frame_id = map_frame_;
@@ -243,11 +238,95 @@ void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9]) {
     tf.transform.translation.z = 0.0;
     tf.transform.rotation = ps.pose.orientation;
     tf_broadcaster_->sendTransform(tf);
+
+    // Publish static TF base -> base_link once
+    static_tf_broadcaster_->sendTransform(tf_N2B_);
 }
 
-int main(int argc, char ** argv) {
-    rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<WbqpControllerNode>());
+// ---------------------------- HELPERS ---------------------------- //
+void WbqpControllerNode::publishStaticBaseToBaseLink()
+{
+    tf_N2B_.header.stamp = this->get_clock()->now();
+    tf_N2B_.header.frame_id = base_frame_;
+    tf_N2B_.child_frame_id  = base_link_frame_;
+    tf_N2B_.transform.translation.x = P_N2B_[0];
+    tf_N2B_.transform.translation.y = P_N2B_[1];
+    tf_N2B_.transform.translation.z = P_N2B_[2];
+    tf_N2B_.transform.rotation = quatFromRPY(theta_N2B_[0], theta_N2B_[1], theta_N2B_[2]);
+    static_tf_broadcaster_->sendTransform(tf_N2B_);
+}
+
+void WbqpControllerNode::publishOutputs(const double x_opt[9])
+{
+    geometry_msgs::msg::Twist base;
+    base.linear.x  = x_opt[6];
+    base.linear.y  = x_opt[7];
+    base.angular.z = x_opt[8];
+    pub_cmd_vel_->publish(base);
+
+    // When you want to publish:
+    sensor_msgs::msg::JointState js;
+    js.header.stamp = this->now();
+    js.velocity.resize(6);
+    for (int i = 0; i < 6; ++i) {js.velocity[i] = x_opt[i];}
+    pub_q_speed_->publish(js);
+}
+
+geometry_msgs::msg::Quaternion WbqpControllerNode::quatFromRPY(double r, double p, double y)
+{
+    tf2::Quaternion q; q.setRPY(r, p, y);
+    geometry_msgs::msg::Quaternion out; out.x=q.x(); out.y=q.y(); out.z=q.z(); out.w=q.w();
+    return out;
+}
+
+// ------------------------------ SPINNER ----------------------------- //
+void WbqpControllerNode::shutdown_handler()
+{
+    RCLCPP_INFO(get_logger(), "Whole Body Controller mean time: %f s", spinner_mean_);
+}
+
+void WbqpControllerNode::spinner()
+{
+    // Add the node to the executor
+    executor_.add_node(shared_from_this());
+
+    // Create a steady clock to measure time
+	rclcpp::Clock steady_clock(RCL_STEADY_TIME);
+
+    // Create timer callback with specified frequency (loop_rate_ in Hz)
+    timer_ = this->create_wall_timer(
+        std::chrono::duration<double>(dt_),  // period in seconds
+        [this, &steady_clock]()
+            {
+                // This is the main loop for the node
+                auto start_time = steady_clock.now();
+                // Compute joints speed cmds
+                loopStep();
+                // Calculate the mean time for each iteration of the spinner
+                double elapsed_time = (steady_clock.now() - start_time).seconds();
+                spinner_mean_ = (spinner_mean_ * static_cast<double>(num_samples_) + elapsed_time) / static_cast<double>(num_samples_ + 1);
+                num_samples_++;
+            });
+
+    // Start spinning
+    executor_.spin();
+
+    // Shutdown the executor
     rclcpp::shutdown();
+}
+
+// -------------------------- MAIN FUNCTION -------------------------- //
+int main(int argc, char ** argv)
+{
+    // Initialize ROS2
+    rclcpp::init(argc, argv);
+
+    // Create a node using the rclcpp library
+    auto node = std::make_shared<WbqpControllerNode>();
+    RCLCPP_INFO(node->get_logger(), "Whole Body Controller node initialized successfully.");
+
+	// Spin the node to start handling callbacks and timers
+    node->spinner();
+
     return 0;
 }
