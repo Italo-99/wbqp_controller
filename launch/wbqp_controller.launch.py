@@ -5,7 +5,7 @@ import os
 
 def generate_launch_description():
     pkg = get_package_share_directory('wbqp_controller')
-    params = os.path.join(pkg, 'config', 'params.yaml')
+    params = os.path.join(pkg, 'config', 'wbqp_params.yaml')
 
     return LaunchDescription([
         Node(

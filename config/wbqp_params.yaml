@@ -22,20 +22,17 @@
       max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
 
     limits:
-      qmin: [1.5708, -1.7453, 0.0000, -3.14159, -3.14159, -3.14159]  # joint position limits (rad) min boundaries [ 90 -100   0 -180 -180 -180]
-      qmax: [3.2289,  1.5708, 2.6180,  3.14159,  2.61799,  3.14159]  # joint position limits (rad) max boundaries [185   90 150  180  150  180]
+      qmin: [-0.1745, -2.0944, -2.3562, -2.3562, -0.0000, -1.5708]  # joint position limits (rad) min boundaries [-10 -120 -135 -135  -0 -180]
+      qmax: [+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +1.5708]  # joint position limits (rad) max boundaries [+90  -85    0   90 110  180]
       qddot_max: 1.0                              # maximum joint acceleration (rad/s^2)
       a_lin_max: 0.2                              # maximum linear acceleration (m/s^2)
       alpha_max: 0.2                              # maximum angular acceleration (rad/s^2)
 
     kinematics:
       P_N2B:     [0.187, 0.0, 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z)
-      theta_N2B: [0.0,   0.0, 0.0]                # orientation of manipulator base link in the mobile base frame (r,p,y)
+      theta_N2B: [0.0,   0.0, 0.00]               # orientation of manipulator base link in the mobile base frame (r,p,y)
 
     frames:
-      map: "map"                                  # fixed world frame 
-      base: "base"                                # mobile base frame
-      base_link: "base_link"                      # manipulator base link frame
-
-# Test with:
-# ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/mobile_manipulator/cmd_vel
+      map:       "map"                            # fixed world frame 
+      base:      "mobile_base"                    # mobile base frame
+      base_link: "world_ur"                       # manipulator base link frame

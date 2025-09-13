@@ -188,6 +188,8 @@ void WbqpControllerNode::loopStep()
     if (!qp_initialized_ || !have_js_ || !have_twist_ || !qp_enabled_)
     {
         // Publish base pose and TF even if QP is not running
+        base_pose_.header.stamp     = this->get_clock()->now();
+        map_base_tf_.header.stamp   = base_pose_.header.stamp;
         publishBaseState(); 
         return;
     }
@@ -337,8 +339,8 @@ void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9])
     // Compute x and y velocities in world frame
     const double vx_w = c * Vx_b - s * Vy_b;
     const double vy_w = s * Vx_b + c * Vy_b;
-    x_base_      += vx_w * dt_;
-    y_base_      += vy_w * dt_;
+    x_base_          += vx_w * dt_;
+    y_base_          += vy_w * dt_;
 
     // Update base pose
     // x_base_       += Vx_b * dt_;
