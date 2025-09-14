@@ -15,6 +15,9 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
+
+  <depend>eigen</depend>
+  <exec_depend>osqp-eigen</exec_depend>
   
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>

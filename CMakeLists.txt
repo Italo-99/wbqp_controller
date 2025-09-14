@@ -21,7 +21,10 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(wbqp_codegen_vendor REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(OsqpEigen REQUIRED)
 
+# Include directories
 include_directories(
   include
 )
@@ -33,6 +36,12 @@ add_executable(wbqp_controller
 
 ament_target_dependencies(wbqp_controller
   rclcpp sensor_msgs geometry_msgs std_msgs std_srvs tf2_ros wbqp_codegen_vendor
+)
+
+# Add the new source file
+target_sources(wbqp_controller
+  PRIVATE
+  src/qp_solver_native.cpp
 )
 
 # --- Menu node target ---
@@ -63,6 +72,8 @@ target_include_directories(wbqp_controller PRIVATE
 # Link with full paths exported by the vendor
 target_link_libraries(wbqp_controller
   ${wbqp_codegen_vendor_LIBRARIES}
+  Eigen3::Eigen
+  OsqpEigen::OsqpEigen
 )
 
 # Install targets

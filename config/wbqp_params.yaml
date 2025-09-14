@@ -10,6 +10,7 @@
       dt: 0.02                                    # control period
 
     qp:
+      use_native: true                            # use native qp solver (true) or matlab generated (false)
       cols: [1,2,3,4,5,6,7,8,12]                  # columns of jacobian (ignore vz, wx, wy for a planar mobile base)
       beta_arm: 0.001                             # weight for the manipulator joints (regularization penalty, penalized less)  
       alpha_xy: 0.002                             # weight for the base translation (penalized more)

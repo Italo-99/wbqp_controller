@@ -19,6 +19,9 @@
 #include <cstring>
 #include <cmath>
 
+// Native solver
+#include <wbqp_controller/qp_solver_native.hpp>
+
 // === MATLAB Coder headers from vendor package ===
 // Use __has_include to include initialize/terminate only if present.
 #include <WholeBodyJacobian.h>
@@ -42,6 +45,9 @@ private:
     // Services
     void onEnableQp(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                          std::shared_ptr<std_srvs::srv::SetBool::Response> response);
+
+    // Native QP
+    void solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9]);
 
     // Builders for MATLAB inputs
     void buildIn15(double out_in1_15[15]) const; // [P_N2B(3), q(6), theta_N2B(3), theta_W2N(3)]
@@ -71,6 +77,11 @@ private:
     std::string topic_cmd_vel_;
     std::string topic_q_speed_;
     double dt_;
+
+    // Native qp
+    bool use_native_qp_ = true;
+    std::array<double,6> in_qmin_from_cfg_or_params_{};
+    std::array<double,6> in_qmax_from_cfg_or_params_{};
 
     // Frames & pose state
     std::string map_frame_;

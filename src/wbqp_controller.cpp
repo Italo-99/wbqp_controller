@@ -73,7 +73,7 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
 
 WbqpControllerNode::~WbqpControllerNode(){}
 
-void::WbqpControllerNode::check_params()
+void WbqpControllerNode::check_params()
 {
   // --- Topics & timing ---
   this->declare_parameter("topics.joint_state", "/joint_states");
@@ -110,6 +110,11 @@ void::WbqpControllerNode::check_params()
   auto th_n2b = this->get_parameter("kinematics.theta_N2B").as_double_array();
   for (int i=0;i<3;++i) { P_N2B_[i] = p_n2b[i]; theta_N2B_[i] = th_n2b[i]; }
 
+  // --- Qp solver type ---
+  this->declare_parameter<bool>("qp.use_native", true);
+  use_native_qp_ = this->get_parameter("qp.use_native").as_bool();
+
+  // Log correctly loaded params
   RCLCPP_INFO(this->get_logger(), "Parameters loaded.");
 }
 
@@ -206,8 +211,15 @@ void WbqpControllerNode::loopStep()
 
     // 3) Solve QP
     double x_opt[9];
-    struct2_T dbg{};
-    wbqp_solve(reinterpret_cast<const struct0_T *>(&qp_), &in, x_opt, &dbg);
+    if (use_native_qp_)
+    {
+        solve_qp_native(in, in.J, x_opt);
+    }
+    else
+    {
+        struct2_T dbg{};
+        wbqp_solve(reinterpret_cast<const struct0_T *>(&qp_), &in, x_opt, &dbg);
+    }
 
     // Warm start
     for (int i=0;i<9;++i) { dotq_prev_[i] = x_opt[i]; }
@@ -288,6 +300,12 @@ void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
     auto qmin = this->get_parameter("limits.qmin").as_double_array();
     auto qmax = this->get_parameter("limits.qmax").as_double_array();
     for (int i=0;i<6;++i) { cfg.qmin[i] = qmin[i]; cfg.qmax[i] = qmax[i]; }
+
+    // Native qp solver: store qmin/qmax for warm start
+    for (int i=0;i<6;++i) {
+        in_qmin_from_cfg_or_params_[i] = cfg.qmin[i];
+        in_qmax_from_cfg_or_params_[i] = cfg.qmax[i];
+    }
 }
 
 void WbqpControllerNode::fillInputStruct(struct1_T &in, const double J6x12_colmajor[72]) const
@@ -325,7 +343,22 @@ void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
     }
 }
 
-// ----------------- MOBILE BASE ODOMETRY (TODO: test orientation integration) ----------------------- //
+// TODO: add menu user to interact and test cmds
+void WbqpControllerNode::solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9])
+{
+    wbqp::NativeQpInput nin;
+    // copy J
+    for (int i=0;i<54;++i) nin.J6x9_colmajor[i] = J6x9_colmajor[i];
+    // copy u*, q, dotq_prev, dt, q-limits
+    for (int i=0;i<6;++i) { nin.u_star[i] = in.u_star[i]; nin.q[i] = in.q[i]; nin.qmin[i] = in_qmin_from_cfg_or_params_[i]; nin.qmax[i] = in_qmax_from_cfg_or_params_[i]; }
+    for (int i=0;i<9;++i) nin.dotq_prev[i] = in.dotq_prev[i];
+    nin.dt = in.dt;
+
+    wbqp::NativeQpOutput zout = wbqp::NativeQpSolver::solve(nin);
+    for (int i=0;i<9;++i) x_opt[i] = zout[i];
+}
+
+// ----------------- MOBILE BASE ODOMETRY ----------------------- //
 void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9])
 {
     // Extract base state
