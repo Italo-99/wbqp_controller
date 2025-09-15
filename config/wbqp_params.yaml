@@ -1,5 +1,18 @@
 /**:
   ros__parameters:
+    mode: "debug"                                         # "run" | "debug"
+
+    # DEBUG PARAMETERS (only used if mode=="debug")
+    console_menu:         true                            # true => enable stdin menu
+    debug.P_N2B:          [0.187, 0., 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z) in meters
+    debug.q_deg:          [0., -90., -90., -0., 90., 0.]  # initial joint positions (deg)
+    debug.theta_N2B_deg:  [0., 0., 0.]                    # orientation of manipulator base link in the mobile base frame (r,p,y) in degrees
+    debug.theta_W2N_deg:  [0., 0., 0.]                    # orientation of world frame in the map frame (r,p,y) in degrees
+    debug.u_star:         [0., 0., 0., 0., 0., 0.]        # desired end-effector twist (vx,vy,vz,wx,wy,wz) in m/s and rad/s
+    debug.dotq_prev:      [0., 0., 0., 0., 0., 0.]        # previous joint velocities (rad/s)
+    debug.step_once:      true                            # if true, perform one control step and then stop
+
+    # RUNTIME PARAMETERS
     topics:
       joint_state: "/joint_states"                # joint state topic for the robotic arm
       twist_cmd:   "/mobile_manipulator/cmd_vel"  # twist command topic for the whole body platform

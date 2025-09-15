@@ -28,6 +28,38 @@
 #include <wbqp_init.h>
 #include <wbqp_solve.h>
 
+// ------- DEBUG STRUCTS ------- //
+// In your node class (e.g., WbqpControllerNode)
+
+enum class Mode
+{
+    RUN,
+    DEBUG
+};
+
+struct DebugInputs
+{
+    // Position of the Base_link in the Neobotics frame
+    std::array<double, 3> P_N2B {0.0, 0.0, 0.0};
+
+    // Euler angles [rad]
+    std::array<double, 3> theta_N2B_rad {0,0,0};
+    std::array<double, 3> theta_W2N_rad {0,0,0};
+
+    // Joint positions [rad]
+    std::array<double, 6> q_rad {0,0,0,0,0,0};
+
+    // Desired base twist u* (6)
+    std::array<double, 6> u_star {0,0,0,0,0,0};
+
+    // Warm start (9)
+    std::array<double, 9> dotq_prev {0,0,0,0,0,0,0,0,0};
+
+    // Step control for DEBUG
+    bool step_once = false;
+};
+
+// ------- RUNTIME CONTROLLER NODE CLASS ------- //
 class WbqpControllerNode : public rclcpp::Node {
 public:
     explicit WbqpControllerNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
@@ -70,6 +102,12 @@ private:
     void check_params();
     void print_params(const struct10_T &cfg);
     void shutdown_handler();
+
+    // Debug mode
+    void declare_and_setup_params_();
+    void apply_params_();
+    void start_menu_thread_();
+    void stop_menu_thread_();
 
     // Params / topics
     std::string topic_joint_state_;
@@ -127,6 +165,17 @@ private:
 
     // Executor & spinner time measurement
     rclcpp::executors::MultiThreadedExecutor executor_;
-  	double spinner_mean_ = 0.0; 			        // Mean time for the spinner loop
+  	double spinner_mean_ = 0.0; 			  // Mean time for the spinner loop
   	unsigned long long int num_samples_ = 0;  // Number of samples for the mean time calculation
+
+    // Debug mode
+    Mode mode_ {Mode::RUN};
+    bool console_menu_ = false;         // if true, run a console menu thread
+    std::thread menu_thread_;
+    std::atomic<bool> stop_menu_ = false;
+    DebugInputs dbg_;
+    std::mutex dbg_mtx_;
+    using ParamCbHandle = rclcpp::node_interfaces::OnSetParametersCallbackHandle;
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_cb_handle_;
+
 };

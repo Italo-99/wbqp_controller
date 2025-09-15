@@ -114,6 +114,9 @@ void WbqpControllerNode::check_params()
   this->declare_parameter<bool>("qp.use_native", true);
   use_native_qp_ = this->get_parameter("qp.use_native").as_bool();
 
+  // --- Debug mode ---
+  declare_and_setup_params_();
+
   // Log correctly loaded params
   RCLCPP_INFO(this->get_logger(), "Parameters loaded.");
 }
@@ -187,29 +190,78 @@ void WbqpControllerNode::print_params(const struct10_T &cfg)
 // ------------------- MAIN LOOP ------------------- //
 void WbqpControllerNode::loopStep()
 {
-    // Publish static TF base -> base_link
+    // Always publish static TF
     static_tf_broadcaster_->sendTransform(tf_N2B_);
 
-    if (!qp_initialized_ || !have_js_ || !have_twist_ || !qp_enabled_)
+    if (mode_ == Mode::RUN)
     {
-        // Publish base pose and TF even if QP is not running
-        base_pose_.header.stamp     = this->get_clock()->now();
-        map_base_tf_.header.stamp   = base_pose_.header.stamp;
-        publishBaseState(); 
-        return;
+        if (!qp_initialized_ || !have_js_ || !have_twist_ || !qp_enabled_)
+        {
+            base_pose_.header.stamp   = this->get_clock()->now();
+            map_base_tf_.header.stamp = base_pose_.header.stamp;
+            publishBaseState();
+            return;
+        }
+    }
+    else
+    {
+        // DEBUG mode: wait for step
+        {
+            std::lock_guard<std::mutex> lk(dbg_mtx_);
+            if (!dbg_.step_once)
+            {
+                // Still publish pose/TF to keep RViz sane
+                base_pose_.header.stamp   = this->get_clock()->now();
+                map_base_tf_.header.stamp = base_pose_.header.stamp;
+                publishBaseState();
+                return;
+            }
+                
+            dbg_.step_once = false;   // consume the step
+        }
+
+        // In DEBUG, synthesize your inputs from dbg_
+        {
+            std::lock_guard<std::mutex> lk(dbg_mtx_);
+
+            P_N2B_[0] = dbg_.P_N2B[0];
+            P_N2B_[1] = dbg_.P_N2B[1];
+            P_N2B_[2] = dbg_.P_N2B[2];
+
+            for (int i=0;i<6;++i)
+            {
+                q_pos_[i]   = dbg_.q_rad[i];
+                u_star_[i]  = dbg_.u_star[i];
+            }
+
+            for (int i=0;i<9;++i)
+            {
+                dotq_prev_[i] = dbg_.dotq_prev[i];
+            }
+
+            for (int i=0;i<3;++i)
+            {
+                theta_N2B_[i] = dbg_.theta_N2B_rad[i];
+                theta_W2N_[i] = dbg_.theta_W2N_rad[i];
+            }
+
+            qp_initialized_ = true;
+            have_js_        = true;
+            have_twist_     = true;
+            qp_enabled_     = true;
+        }
     }
 
-    // 1) Build WBJ input and compute 6x12 Jacobian (column-major)
+    // --- Your existing pipeline ---
     double in1[15];
     buildIn15(in1);
+
     double A6x12_colmajor[72];
     WholeBodyJacobian(in1, A6x12_colmajor);
 
-    // 2) Fill in-struct for wbqp_solve
     struct1_T in{};
     fillInputStruct(in, A6x12_colmajor);
 
-    // 3) Solve QP
     double x_opt[9];
     if (use_native_qp_)
     {
@@ -217,17 +269,13 @@ void WbqpControllerNode::loopStep()
     }
     else
     {
-        struct2_T dbg{};
-        wbqp_solve(reinterpret_cast<const struct0_T *>(&qp_), &in, x_opt, &dbg);
+        struct2_T dbg_out{};
+        wbqp_solve(reinterpret_cast<const struct0_T *>(&qp_), &in, x_opt, &dbg_out);
     }
 
-    // Warm start
     for (int i=0;i<9;++i) { dotq_prev_[i] = x_opt[i]; }
 
-    // Integrate base and publish TF/Pose
     integrateAndPublishBase(x_opt);
-
-    // Publish outputs
     publishOutputs(x_opt);
 }
 
@@ -469,6 +517,13 @@ void WbqpControllerNode::spinner()
                 double elapsed_time = (steady_clock.now() - start_time).seconds();
                 spinner_mean_ = (spinner_mean_ * static_cast<double>(num_samples_) + elapsed_time) / static_cast<double>(num_samples_ + 1);
                 num_samples_++;
+
+                if (mode_ == Mode::DEBUG)
+                {
+                    RCLCPP_INFO(this->get_logger(),
+                        "[DEBUG] iter=%llu dt=%.6f s mean=%.6f s",
+                        num_samples_, elapsed_time, spinner_mean_);
+                }
             });
 
     // Start spinning
@@ -476,6 +531,216 @@ void WbqpControllerNode::spinner()
 
     // Shutdown the executor
     rclcpp::shutdown();
+}
+
+// --------------------------- DEBUG MENU -------------------------- //
+void WbqpControllerNode::declare_and_setup_params_()
+{
+    this->declare_parameter<std::string>("mode", "run");    // "run" | "debug"
+    this->declare_parameter<bool>("console_menu", true);    // true => enable stdin menu
+
+    // DEBUG input arrays (values in DEGREES where applicable)
+    this->declare_parameter<std::vector<double>>("debug.P_N2B", {0,0,0});                   // meters
+    this->declare_parameter<std::vector<double>>("debug.q_deg", {0,0,0,0,0,0});             // deg
+    this->declare_parameter<std::vector<double>>("debug.theta_N2B_deg", {0,0,0});           // deg
+    this->declare_parameter<std::vector<double>>("debug.theta_W2N_deg", {0,0,0});           // deg
+    this->declare_parameter<std::vector<double>>("debug.u_star", {0,0,0,0,0,0});
+    this->declare_parameter<std::vector<double>>("debug.dotq_prev", {0,0,0,0,0,0,0,0,0});
+    this->declare_parameter<bool>("debug.step_once", false);
+
+    // Initial read
+    apply_params_();
+
+    // Listen for changes
+    param_cb_handle_ = this->add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter> &params)
+        {
+            std::lock_guard<std::mutex> lk(dbg_mtx_);
+            for (const auto &p : params)
+            {
+                if (p.get_name() == "mode")
+                {
+                    const auto v = p.as_string();
+                    mode_ = (v == "debug") ? Mode::DEBUG : Mode::RUN;
+                }
+                else if (p.get_name() == "console_menu")
+                {
+                    console_menu_ = p.as_bool();
+                    // Start/stop menu thread dynamically if you want (optional)
+                }
+                else if (p.get_name() == "debug.P_N2B")
+                {
+                    auto v = p.as_double_array();
+                    if (v.size() == 3) { for (int i=0;i<3;++i) { dbg_.P_N2B[i] = v[i]; } }
+                }
+                else if (p.get_name() == "debug.q_deg")
+                {
+                    auto v = p.as_double_array();
+                    if (v.size() == 6)
+                    {
+                        for (int i=0;i<6;++i) { dbg_.q_rad[i] = v[i] * M_PI / 180.0; }
+                    }
+                }
+                else if (p.get_name() == "debug.theta_N2B_deg")
+                {
+                    auto v = p.as_double_array();
+                    if (v.size() == 3) { for (int i=0;i<3;++i) { dbg_.theta_N2B_rad[i] = v[i] * M_PI / 180.0; } }
+                }
+                else if (p.get_name() == "debug.theta_W2N_deg")
+                {
+                    auto v = p.as_double_array();
+                    if (v.size() == 3) { for (int i=0;i<3;++i) { dbg_.theta_W2N_rad[i] = v[i] * M_PI / 180.0; } }
+                }
+                else if (p.get_name() == "debug.u_star")
+                {
+                    auto v = p.as_double_array();
+                    if (v.size() == 6) { for (int i=0;i<6;++i) { dbg_.u_star[i] = v[i]; } }
+                }
+                else if (p.get_name() == "debug.dotq_prev")
+                {
+                    auto v = p.as_double_array();
+                    if (v.size() == 9) { for (int i=0;i<9;++i) { dbg_.dotq_prev[i] = v[i]; } }
+                }
+                else if (p.get_name() == "debug.step_once")
+                {
+                    dbg_.step_once = p.as_bool();
+                }
+            }
+            rcl_interfaces::msg::SetParametersResult res;
+            res.successful = true;
+            return res;
+        }
+    );
+}
+
+void WbqpControllerNode::apply_params_()
+{
+    std::lock_guard<std::mutex> lk(dbg_mtx_);
+    const auto mode_str = this->get_parameter("mode").as_string();
+    mode_ = (mode_str == "debug") ? Mode::DEBUG : Mode::RUN;
+
+    console_menu_ = this->get_parameter("console_menu").as_bool();
+
+    auto P = this->get_parameter("debug.P_N2B").as_double_array();
+    if (P.size() == 3) { for (int i=0;i<3;++i) { dbg_.P_N2B[i] = P[i]; } }
+
+    auto qdeg = this->get_parameter("debug.q_deg").as_double_array();
+    if (qdeg.size() == 6) { for (int i=0;i<6;++i) { dbg_.q_rad[i] = qdeg[i] * M_PI / 180.0; } }
+
+    auto tNB = this->get_parameter("debug.theta_N2B_deg").as_double_array();
+    if (tNB.size() == 3) { for (int i=0;i<3;++i) { dbg_.theta_N2B_rad[i] = tNB[i] * M_PI / 180.0; } }
+
+    auto tWN = this->get_parameter("debug.theta_W2N_deg").as_double_array();
+    if (tWN.size() == 3) { for (int i=0;i<3;++i) { dbg_.theta_W2N_rad[i] = tWN[i] * M_PI / 180.0; } }
+
+    auto us = this->get_parameter("debug.u_star").as_double_array();
+    if (us.size() == 6) { for (int i=0;i<6;++i) { dbg_.u_star[i] = us[i]; } }
+
+    auto ws = this->get_parameter("debug.dotq_prev").as_double_array();
+    if (ws.size() == 9) { for (int i=0;i<9;++i) { dbg_.dotq_prev[i] = ws[i]; } }
+
+    dbg_.step_once = this->get_parameter("debug.step_once").as_bool();
+}
+
+void WbqpControllerNode::start_menu_thread_()
+{
+    if (!console_menu_) { return; }
+    stop_menu_ = false;
+
+    menu_thread_ = std::thread([this]()
+    {
+        auto deg2rad = [](double d) { return d * M_PI / 180.0; };
+
+        while (!stop_menu_)
+        {
+            std::cout << "\n[WBQP DEBUG MENU]\n";
+            std::cout << "1) Set q [deg x6]\n";
+            std::cout << "2) Set theta_N2B [deg x3]\n";
+            std::cout << "3) Set theta_W2N [deg x3]\n";
+            std::cout << "4) Set P_N2B [m x3]\n";
+            std::cout << "5) Set u_star [x6]\n";
+            std::cout << "6) Set dotq_prev [x9]\n";
+            std::cout << "7) STEP ONCE\n";
+            std::cout << "8) Toggle mode (run/debug)\n";
+            std::cout << "9) Quit menu\n> " << std::flush;
+
+            int opt = 0;
+            if (!(std::cin >> opt)) { std::cin.clear(); std::cin.ignore(1024, '\n'); continue; }
+
+            if (opt == 9)
+            {
+                break;
+            }
+
+            std::lock_guard<std::mutex> lk(dbg_mtx_);
+
+            auto read_vec = [](int n)
+            {
+                std::vector<double> v(n, 0.0);
+                for (int i=0;i<n;++i) { std::cin >> v[i]; }
+                return v;
+            };
+
+            if (opt == 1)
+            {
+                std::cout << "Enter 6 angles [deg]: ";
+                auto v = read_vec(6);
+                for (int i=0;i<6;++i) { dbg_.q_rad[i] = deg2rad(v[i]); }
+            }
+            else if (opt == 2)
+            {
+                std::cout << "Enter 3 angles [deg]: ";
+                auto v = read_vec(3);
+                for (int i=0;i<3;++i) { dbg_.theta_N2B_rad[i] = deg2rad(v[i]); }
+            }
+            else if (opt == 3)
+            {
+                std::cout << "Enter 3 angles [deg]: ";
+                auto v = read_vec(3);
+                for (int i=0;i<3;++i) { dbg_.theta_W2N_rad[i] = deg2rad(v[i]); }
+            }
+            else if (opt == 4)
+            {
+                std::cout << "Enter 3 positions [m]: ";
+                auto v = read_vec(3);
+                for (int i=0;i<3;++i) { dbg_.P_N2B[i] = v[i]; }
+            }
+            else if (opt == 5)
+            {
+                std::cout << "Enter 6 values: ";
+                auto v = read_vec(6);
+                for (int i=0;i<6;++i) { dbg_.u_star[i] = v[i]; }
+            }
+            else if (opt == 6)
+            {
+                std::cout << "Enter 9 values: ";
+                auto v = read_vec(9);
+                for (int i=0;i<9;++i) { dbg_.dotq_prev[i] = v[i]; }
+            }
+            else if (opt == 7)
+            {
+                dbg_.step_once = true;
+            }
+            else if (opt == 8)
+            {
+                if (mode_ == Mode::RUN) { mode_ = Mode::DEBUG; }
+                else { mode_ = Mode::RUN; }
+                std::cout << "Mode is now: " << ((mode_==Mode::DEBUG) ? "DEBUG" : "RUN") << "\n";
+            }
+
+            // print a quick summary after each action
+            std::cout << "OK. (Values updated.)\n";
+        }
+
+        std::cout << "[WBQP MENU] exiting.\n";
+    });
+}
+
+void WbqpControllerNode::stop_menu_thread_()
+{
+    if (!console_menu_) { return; }
+    stop_menu_ = true;
+    if (menu_thread_.joinable()) { menu_thread_.join(); }
 }
 
 // -------------------------- MAIN FUNCTION -------------------------- //

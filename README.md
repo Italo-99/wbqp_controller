@@ -44,7 +44,7 @@ colcon build --packages-select wbqp_controller
 
 ## Parameters (YAML)
 
-See `config/params.yaml` — includes QP weights/limits, Jacobian column mapping, dt, frames, topics.
+See `config/wbqp_params.yaml` — includes QP weights/limits, Jacobian column mapping, dt, frames, topics.
 
 ---
 
