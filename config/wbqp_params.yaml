@@ -1,9 +1,9 @@
 /**:
   ros__parameters:
-    mode: "debug"                                         # "run" | "debug"
+    mode: "run"                                           # "run" | "debug"
 
     # DEBUG PARAMETERS (only used if mode=="debug")
-    console_menu:         true                            # true => enable stdin menu
+    console_menu:         false                           # true => enable stdin menu
     debug.P_N2B:          [0.187, 0., 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z) in meters
     debug.q_deg:          [0., -90., -90., -0., 90., 0.]  # initial joint positions (deg)
     debug.theta_N2B_deg:  [0., 0., 0.]                    # orientation of manipulator base link in the mobile base frame (r,p,y) in degrees
@@ -38,9 +38,9 @@
     limits:
       qmin: [-0.1745, -2.0944, -2.3562, -2.3562, -0.0000, -1.5708]  # joint position limits (rad) min boundaries [-10 -120 -135 -135  -0 -180]
       qmax: [+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +1.5708]  # joint position limits (rad) max boundaries [+90  -85    0   90 110  180]
-      qddot_max: 1.0                              # maximum joint acceleration (rad/s^2)
-      a_lin_max: 0.2                              # maximum linear acceleration (m/s^2)
-      alpha_max: 0.2                              # maximum angular acceleration (rad/s^2)
+      qddot_max: 2.0                              # maximum joint acceleration (rad/s^2)
+      a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)
+      alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
 
     kinematics:
       P_N2B:     [0.187, 0.0, 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z)

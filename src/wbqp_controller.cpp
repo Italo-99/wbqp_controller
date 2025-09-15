@@ -324,7 +324,7 @@ void WbqpControllerNode::onEnableQp(const std::shared_ptr<std_srvs::srv::SetBool
     RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
 }
 
-// ------------------- OPTIMIZER CONFIGURATION ------------------- //
+// ------------------- MATLAB OPTIMIZER CONFIGURATION ------------------- //
 void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
 {
     std::memset(&cfg, 0, sizeof(cfg));
@@ -408,6 +408,7 @@ void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
     }
 }
 
+// ------------------- NATIVE OPTIMIZER CONFIGURATION ------------------- //
 void WbqpControllerNode::solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9])
 {
     wbqp::NativeQpInput nin;
@@ -534,7 +535,7 @@ void WbqpControllerNode::spinner()
                 spinner_mean_ = (spinner_mean_ * static_cast<double>(num_samples_) + elapsed_time) / static_cast<double>(num_samples_ + 1);
                 num_samples_++;
 
-                if (mode_ == Mode::DEBUG && dbg_.step_once && step_done)
+                if (mode_ == Mode::DEBUG && step_done)
                 {
                     RCLCPP_INFO(this->get_logger(),
                         "[DEBUG] iter=%llu dt=%.6f s mean=%.6f s",
