@@ -14,6 +14,7 @@ namespace wbqp
 
     void NativeQpSolver::buildTask(const Eigen::Matrix<double,6,9>& J,  // TODO: set Wt as init
                                    const Eigen::Matrix<double,6,1>& u,
+                                   const Eigen::Matrix<double,9,1>& dqprev,
                                    Eigen::Matrix<double,9,9>& H,
                                    Eigen::Matrix<double,9,1>& f)
     {
@@ -24,7 +25,7 @@ namespace wbqp
 
         // 0.5 z^T H z + f^T z with 2x scaling to match LS normal equations convention
         H = 2.0 * (J.transpose() * Wt * J);
-        f = -2.0 * (J.transpose() * Wt * u);
+        f = -2.0 * (J.transpose() * Wt * u + NativeQpConfig::nu * dqprev);
     }
 
     void NativeQpSolver::buildReg(Eigen::Matrix<double,9,9>& H) // TODO: set R as init
@@ -92,6 +93,7 @@ namespace wbqp
                                    const Eigen::SparseMatrix<double>& Aall,
                                    const Eigen::VectorXd& l_in,
                                    const Eigen::VectorXd& u_in,
+                                   const Eigen::Matrix<double,9,1>& xwarm_in,
                                    NativeQpOutput &out)
     {
         OsqpEigen::Solver solver;
@@ -99,6 +101,7 @@ namespace wbqp
         solver.settings()->setVerbosity(false);
         solver.settings()->setAlpha(1.6);
         solver.settings()->setPolish(true);
+        solver.settings()->setTimeLimit(0.01);
 
         // ---- critical: local, non-const, dynamic vectors ----
         Eigen::VectorXd f  = f_in;   // dynamic copy (non-const)
@@ -114,6 +117,22 @@ namespace wbqp
         solver.data()->setUpperBound(ub);                 // binds to Ref<VectorXd>
 
         if (!solver.initSolver()) return false;
+
+        // --- Warm start with previous velocity (project to box bounds to be safe) ---
+        Eigen::VectorXd x0 = xwarm_in;
+        for (int i = 0; i < 9; ++i) {
+            // project onto simple variable bounds if present in u/l blocks
+            // ub segment at rows [r0, r0+9) holds upper bounds; lb isn't explicit
+            // but we have box bounds separately in the caller: clamp with +/-inf guard
+            double lo = -std::numeric_limits<double>::infinity();
+            double hi =  std::numeric_limits<double>::infinity();
+            // If you keep explicit lb/ub arrays around, use them here instead:
+            // lo = lb_vars[i]; hi = ub_vars[i];
+            // For now just guard against NaNs.
+            if (!std::isfinite(x0[i])) x0[i] = 0.0;
+            // (Optional) clamp to known joint speed limits if you have them cached
+        }
+        solver.setPrimalVariable(x0);   // only primal is fine; dual not required. :contentReference[oaicite:1]{index=1}
 
         const auto status = solver.solveProblem();
         if (status != OsqpEigen::ErrorExitFlag::NoError) return false;
@@ -142,10 +161,11 @@ namespace wbqp
         // Map inputs
         const Eigen::Matrix<double,6,9> J = mapJ(in.J6x9_colmajor);
         Eigen::Matrix<double,6,1> u; for (int i=0;i<6;++i) u[i] = in.u_star[i];
-
+        Eigen::Matrix<double,9,1> dqprev; for (int i=0;i<9;++i) dqprev[i] = in.dotq_prev[i];
+        
         // Build quadratic objective
         Eigen::Matrix<double,9,9> H; Eigen::Matrix<double,9,1> f;
-        buildTask(J, u, H, f);
+        buildTask(J, u, dqprev, H, f);
         buildReg(H);
 
         // Bounds and linear constraints
@@ -175,7 +195,7 @@ namespace wbqp
         // Sparse H for OSQP
         Eigen::SparseMatrix<double> Hs = H.sparseView();
         NativeQpOutput out{};
-        if (solveOsqp(Hs, f, Ab, lAll, uAll, out)) return out;
+        if (solveOsqp(Hs, f, Ab, lAll, uAll, dqprev, out)) return out;
 
         // Fallback
         NativeQpOutput out_f{};

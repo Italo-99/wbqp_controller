@@ -8,7 +8,7 @@
       <DockSplitter orientation="-" sizes="0.500566;0.499434" count="2">
        <DockArea name="...">
         <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
-         <range bottom="-0.008859" right="7.480340" left="2.481330" top="0.125275"/>
+         <range bottom="-0.207173" right="798.941450" left="793.943100" top="2.173628"/>
          <limitY/>
          <curve color="#ff7f0e" name="/manipulator/cmd_vel/linear/x"/>
          <curve color="#f14cc1" name="/manipulator/cmd_vel/linear/y"/>
@@ -17,7 +17,7 @@
        </DockArea>
        <DockArea name="...">
         <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
-         <range bottom="-0.003060" right="7.442107" left="2.541941" top="0.125459"/>
+         <range bottom="-0.100000" right="798.920037" left="794.019871" top="0.100000"/>
          <limitY/>
          <curve color="#17becf" name="/mobile_manipulator/cmd_vel/linear/x"/>
          <curve color="#bcbd22" name="/mobile_manipulator/cmd_vel/linear/y"/>
@@ -28,7 +28,7 @@
       <DockSplitter orientation="-" sizes="0.500566;0.499434" count="2">
        <DockArea name="...">
         <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
-         <range bottom="-0.023184" right="7.480295" left="2.481297" top="0.110122"/>
+         <range bottom="-0.210033" right="798.941328" left="793.943030" top="0.171424"/>
          <limitY/>
          <curve color="#d62728" name="/cmd_vel/linear/x"/>
          <curve color="#1ac938" name="/cmd_vel/linear/y"/>
@@ -37,7 +37,7 @@
        </DockArea>
        <DockArea name="...">
         <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
-         <range bottom="-0.000050" right="7.480035" left="2.480294" top="0.002064"/>
+         <range bottom="0.567835" right="798.941195" left="793.941195" top="0.869845"/>
          <limitY/>
          <curve color="#f14cc1" name="/mobile_manipulator/base_pose/pose/orientation/yaw"/>
         </plot>
@@ -88,6 +88,7 @@
  </Plugins>
  <!-- - - - - - - - - - - - - - - -->
  <previouslyLoaded_Datafiles/>
+ <previouslyLoaded_Streamer name="ROS2 Topic Subscriber"/>
  <!-- - - - - - - - - - - - - - - -->
  <customMathEquations/>
  <snippets/>

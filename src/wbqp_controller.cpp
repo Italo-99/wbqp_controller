@@ -284,6 +284,13 @@ bool WbqpControllerNode::loopStep()
         wbqp_solve(reinterpret_cast<const struct0_T *>(&qp_), &in, x_opt, &dbg_out);
     }
 
+    bool xopt_ok = checkXoptValues(x_opt);
+    if (!xopt_ok)
+    {
+        RCLCPP_ERROR(this->get_logger(), "QP solver returned invalid values (inf or nan). Skipping this cycle.");
+        for (int i=0;i<9;++i) { x_opt[i] = dotq_prev_[i]; }
+    }
+
     for (int i=0;i<9;++i) { dotq_prev_[i] = x_opt[i]; }
 
     // Display results if in DEBUG
@@ -537,6 +544,50 @@ void WbqpControllerNode::publishArmTwist(const double J6x9_colmajor[54],
     msg.angular.z = v_arm(5);
 
     pub_arm_vel_->publish(msg);
+}
+
+bool WbqpControllerNode::checkXoptValues(const double x_opt[9]) const
+{
+    bool ok {true};
+
+    for (int i = 0; i < 9; ++i)
+    {
+        const double v = x_opt[i];
+
+        if (std::isnan(v))
+        {
+            RCLCPP_ERROR(this->get_logger(), "x_opt[%d] is NaN", i);
+            ok = false;
+            continue;
+        }
+
+        if (std::isinf(v))
+        {
+            if (std::signbit(v))
+            {
+                RCLCPP_ERROR(this->get_logger(), "x_opt[%d] is -inf", i);
+            }
+            else
+            {
+                RCLCPP_ERROR(this->get_logger(), "x_opt[%d] is +inf", i);
+            }
+            ok = false;
+            continue;
+        }
+
+        if (v > 1000.0)
+        {
+            RCLCPP_WARN(this->get_logger(), "x_opt[%d] = %.6f > +1000", i, v);
+            ok = false;
+        }
+        else if (v < -1000.0)
+        {
+            RCLCPP_WARN(this->get_logger(), "x_opt[%d] = %.6f < -1000", i, v);
+            ok = false;
+        }
+    }
+
+    return ok;
 }
 
 // ------------------------------ SPINNER ----------------------------- //

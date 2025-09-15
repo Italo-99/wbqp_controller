@@ -91,6 +91,7 @@ private:
                                      const std::vector<int>& cols1based,
                                      double J6x9_colmajor[54]);
     void publishOutputs(const double x_opt[9]);
+    bool checkXoptValues(const double x_opt[9]) const;
 
     // Pose integration + TF
     void integrateAndPublishBase(const double x_opt[9]);

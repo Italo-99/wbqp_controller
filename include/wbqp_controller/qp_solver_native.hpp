@@ -40,7 +40,7 @@ namespace wbqp
         std::array<double,6>  u_star{};         // desired ee twist in WORLD [vx vy vz wx wy wz]
         std::array<double,6>  q{};              // current joints
         std::array<double,9>  dotq_prev{};      // last cycle solution [dq(6), Vx, Vy, Omegaz]
-        double                dt{0.02};
+        double                dt{0.005};
         std::array<double,6>  qmin{ {-0.1745, -2.0944, -2.3562, -2.3562, -0.0000, -1.5708} };
         std::array<double,6>  qmax{ {+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +1.5708} };
     };
@@ -60,6 +60,7 @@ namespace wbqp
 
         static void buildTask(const Eigen::Matrix<double,6,9>& J,
                             const Eigen::Matrix<double,6,1>& u,
+                            const Eigen::Matrix<double,9,1>& dqprev,
                             Eigen::Matrix<double,9,9>& H,
                             Eigen::Matrix<double,9,1>& f);
 
@@ -77,6 +78,7 @@ namespace wbqp
                             const Eigen::SparseMatrix<double>& Aall,
                             const Eigen::VectorXd& lAll,
                             const Eigen::VectorXd& uAll,
+                            const Eigen::Matrix<double,9,1>& xwarm_in,
                             NativeQpOutput &out);
 
         static void solveFallback(const Eigen::Matrix<double,9,9>& H,
