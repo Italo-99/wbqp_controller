@@ -69,9 +69,20 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     rclcpp::contexts::get_global_default_context()->add_pre_shutdown_callback(
         std::bind(&WbqpControllerNode::shutdown_handler, this) // Register shutdown handler
     );
+
+    // Confirm correct node startup
+    RCLCPP_INFO(this->get_logger(), "Whole Body Controller node initialized successfully.");
+
+    // --- Debug mode ---
+    declare_and_setup_debug_params_();
 }
 
-WbqpControllerNode::~WbqpControllerNode(){}
+WbqpControllerNode::~WbqpControllerNode()
+{
+    timer_.reset();
+    stop_menu_thread_();
+    param_cb_handle_.reset();
+}
 
 void WbqpControllerNode::check_params()
 {
@@ -113,9 +124,6 @@ void WbqpControllerNode::check_params()
   // --- Qp solver type ---
   this->declare_parameter<bool>("qp.use_native", true);
   use_native_qp_ = this->get_parameter("qp.use_native").as_bool();
-
-  // --- Debug mode ---
-  declare_and_setup_params_();
 
   // Log correctly loaded params
   RCLCPP_INFO(this->get_logger(), "Parameters loaded.");
@@ -188,7 +196,7 @@ void WbqpControllerNode::print_params(const struct10_T &cfg)
 }
 
 // ------------------- MAIN LOOP ------------------- //
-void WbqpControllerNode::loopStep()
+bool WbqpControllerNode::loopStep()
 {
     // Always publish static TF
     static_tf_broadcaster_->sendTransform(tf_N2B_);
@@ -200,7 +208,7 @@ void WbqpControllerNode::loopStep()
             base_pose_.header.stamp   = this->get_clock()->now();
             map_base_tf_.header.stamp = base_pose_.header.stamp;
             publishBaseState();
-            return;
+            return false;
         }
     }
     else
@@ -214,7 +222,7 @@ void WbqpControllerNode::loopStep()
                 base_pose_.header.stamp   = this->get_clock()->now();
                 map_base_tf_.header.stamp = base_pose_.header.stamp;
                 publishBaseState();
-                return;
+                return false;
             }
                 
             dbg_.step_once = false;   // consume the step
@@ -275,8 +283,17 @@ void WbqpControllerNode::loopStep()
 
     for (int i=0;i<9;++i) { dotq_prev_[i] = x_opt[i]; }
 
+    // Display results if in DEBUG
+    if (mode_ == Mode::DEBUG)
+    {
+        RCLCPP_INFO(this->get_logger(), "QP solution:");
+        for (int i=0;i<9;++i) { RCLCPP_INFO(this->get_logger(), "  x_opt[%d] = %.6f", i, x_opt[i]);}
+    }
+
     integrateAndPublishBase(x_opt);
     publishOutputs(x_opt);
+
+    return true;
 }
 
 // ------------------- CALLBACKS ------------------- //
@@ -391,7 +408,6 @@ void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
     }
 }
 
-// TODO: add menu user to interact and test cmds
 void WbqpControllerNode::solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9])
 {
     wbqp::NativeQpInput nin;
@@ -512,17 +528,19 @@ void WbqpControllerNode::spinner()
                 // This is the main loop for the node
                 auto start_time = steady_clock.now();
                 // Compute joints speed cmds
-                loopStep();
+                bool step_done = loopStep();
                 // Calculate the mean time for each iteration of the spinner
                 double elapsed_time = (steady_clock.now() - start_time).seconds();
                 spinner_mean_ = (spinner_mean_ * static_cast<double>(num_samples_) + elapsed_time) / static_cast<double>(num_samples_ + 1);
                 num_samples_++;
 
-                if (mode_ == Mode::DEBUG)
+                if (mode_ == Mode::DEBUG && dbg_.step_once && step_done)
                 {
                     RCLCPP_INFO(this->get_logger(),
                         "[DEBUG] iter=%llu dt=%.6f s mean=%.6f s",
                         num_samples_, elapsed_time, spinner_mean_);
+
+                    dbg_.step_once = false;
                 }
             });
 
@@ -534,7 +552,7 @@ void WbqpControllerNode::spinner()
 }
 
 // --------------------------- DEBUG MENU -------------------------- //
-void WbqpControllerNode::declare_and_setup_params_()
+void WbqpControllerNode::declare_and_setup_debug_params_()
 {
     this->declare_parameter<std::string>("mode", "run");    // "run" | "debug"
     this->declare_parameter<bool>("console_menu", true);    // true => enable stdin menu
@@ -611,6 +629,9 @@ void WbqpControllerNode::declare_and_setup_params_()
             return res;
         }
     );
+
+    // Start menu thread if enabled
+    start_menu_thread_();
 }
 
 void WbqpControllerNode::apply_params_()
@@ -751,7 +772,6 @@ int main(int argc, char ** argv)
 
     // Create a node using the rclcpp library
     auto node = std::make_shared<WbqpControllerNode>();
-    RCLCPP_INFO(node->get_logger(), "Whole Body Controller node initialized successfully.");
 
 	// Spin the node to start handling callbacks and timers
     node->spinner();

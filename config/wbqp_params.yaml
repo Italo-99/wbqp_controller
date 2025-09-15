@@ -10,7 +10,7 @@
     debug.theta_W2N_deg:  [0., 0., 0.]                    # orientation of world frame in the map frame (r,p,y) in degrees
     debug.u_star:         [0., 0., 0., 0., 0., 0.]        # desired end-effector twist (vx,vy,vz,wx,wy,wz) in m/s and rad/s
     debug.dotq_prev:      [0., 0., 0., 0., 0., 0.]        # previous joint velocities (rad/s)
-    debug.step_once:      true                            # if true, perform one control step and then stop
+    debug.step_once:      false                           # if true, perform one control step and then stop
 
     # RUNTIME PARAMETERS
     topics:

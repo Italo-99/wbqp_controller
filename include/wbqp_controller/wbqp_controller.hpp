@@ -72,7 +72,7 @@ private:
     // Callbacks
     void jointStateCb(const sensor_msgs::msg::JointState::SharedPtr msg);
     void twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr msg);
-    void loopStep();
+    bool loopStep();
 
     // Services
     void onEnableQp(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
@@ -104,7 +104,7 @@ private:
     void shutdown_handler();
 
     // Debug mode
-    void declare_and_setup_params_();
+    void declare_and_setup_debug_params_();
     void apply_params_();
     void start_menu_thread_();
     void stop_menu_thread_();

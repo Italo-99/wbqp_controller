@@ -1,137 +1,155 @@
-# WHOLE BODY CONTROLLER WITH QP SOLVER
+# Whole-Body Controller with QP Solver
 
-ROS 2 node that wraps MATLAB-exported Whole-Body QP (via the vendor package `wbqp_codegen_vendor`).
-It consumes `WholeBodyJacobian`, `wbqp_init`, and `wbqp_solve` from the vendor, subscribes to joint state and EE twist, solves the QP, and publishes base/joint commands, while broadcasting TFs and a pose.
+ROS 2 node wrapping MATLAB-exported Whole-Body QP (from the vendor package `wbqp_codegen_vendor`).
+It computes optimal joint/base velocity commands from a Jacobian and desired end-effector twist, then publishes commands and TFs for integration into your robot system.
 
 ---
 
-## Depends on
+## 1. Dependencies
 
-- `wbqp_codegen_vendor` (builds & installs static libs: `wbqp_init`, `wbqp_solve`, `whole_body_jacobian`, and headers under `include/<libname>`)
-- `rclcpp`, `sensor_msgs`, `geometry_msgs`, `std_msgs`, `tf2_ros`, `std_srvs`
+* `wbqp_codegen_vendor` (provides static libs: `wbqp_init`, `wbqp_solve`, `whole_body_jacobian`, plus headers under `include/<libname>`)
+* `rclcpp`, `sensor_msgs`, `geometry_msgs`, `std_msgs`, `tf2_ros`, `std_srvs`
 
-Ensure the vendor package is built first:
+Build order:
 
 ```bash
 colcon build --packages-select wbqp_codegen_vendor
-```
-
-Then build this:
-
-```bash
 colcon build --packages-select wbqp_controller
 ```
 
 ---
 
-## Topics
+## 2. Topics
 
-- Subscribes
-  - `/joint_states` (`sensor_msgs/JointState`)
-  - `/mobile_manipulator/cmd_vel` (`geometry_msgs/Twist`) — desired EE twist in world
+* **Subscribes**
 
-- Publishes
-  - `/cmd_vel` (`geometry_msgs/Twist`) — base cmd
-  - `/manipulator/js_cmd_vel` (`std_msgs/Float64MultiArray`) — joint speed cmd (param-driven via `topics.q_speed`)
-  - `/mobile_robot/pose` (`geometry_msgs/PoseStamped`) — integrated base pose in `map`
+  * `/joint_states` (`sensor_msgs/JointState`)
+  * `/mobile_manipulator/cmd_vel` (`geometry_msgs/Twist`) — desired EE twist in world frame
 
-## TF
+* **Publishes**
 
-- **dynamic**: `map → mobile_base` (integrated from Vx, Vy, Ωz)
-- **static**: `mobile_base → world_arm` (from translation and rotation offsets)
+  * `/cmd_vel` (`geometry_msgs/Twist`) — base velocity command
+  * `/manipulator/js_cmd_vel` (`std_msgs/JointState`) — joint speed command (topic name configurable via `topics.q_speed`)
+  * `/mobile_robot/pose` (`geometry_msgs/PoseStamped`) — integrated base pose in `map`
 
 ---
 
-## Parameters (YAML)
+## 3. TF Frames
 
-See `config/wbqp_params.yaml` — includes QP weights/limits, Jacobian column mapping, dt, frames, topics.
+* **Dynamic**: `map → mobile_base` (integrated from base velocity)
+* **Static**: `mobile_base → world_arm` (translation + rotation offsets)
 
 ---
 
-## Utils
+## 4. Parameters
 
-### Robotic arm kinematics
+All configuration is handled in YAML:
+`config/wbqp_params.yaml`
 
-Planner (set _publish_joint_states:=False_ when the real robot is used):
+Includes:
+
+* QP weights and limits
+* Jacobian column mapping
+* Control timestep `dt`
+* Frame names
+* Topic names
+
+---
+
+## 5. Utilities
+
+### 5.1 Robotic Arm Kinematics
+
+Run a planner (disable publishing joint states if you are using the real robot):
 
 ```bash
 ros2 launch manipulators ur5e_eecam.launch.py publish_joint_states:=True xacro_args:='camera:=false gripper:=false gfloor:=false gripper_collision_box:=true'
 ```
 
 Manipulator menu:
+
 ```bash
 ros2 run manipulators manipulator_menu_user
 ```
 
-### Real robot
+### 5.2 Real Robot Drivers
 
-Drivers:
+Launch robot drivers:
+
 ```bash
 ros2 launch manipulators real_control_driver.launch.py ur_type:=ur5e
 ```
 
-Hardware communication for UR:
+UR hardware communication:
+
 ```bash
-ros2 launch ur_rtde_controller rtde_controller.launch.py enable_gripper:=false ROBOT_IP:=192.168.137.102 
+ros2 launch ur_rtde_controller rtde_controller.launch.py enable_gripper:=false ROBOT_IP:=192.168.137.102
 ```
 
-### Interfaces
+### 5.3 Interfaces
 
 Joystick teleop for the arm:
+
 ```bash
-ros2 launch manipulators joystick_controller.launch.py 
+ros2 launch manipulators joystick_controller.launch.py --ros-args -r manipulator/cmd_vel:=/mobile_manipulator/cmd_vel
 ```
 
 Keyboard teleop for the whole-body platform:
+
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/mobile_manipulator/cmd_vel
 ```
 
-Gui:
+GUI:
+
 ```bash
 ros2 run sirio_utilities sirio_arm_gui --ros-args -r /manipulator/tcp_force:=/mobile_manipulator/filtered_wrench
 ```
 
-### Force_driven control
+### 5.4 Force-Driven Control
 
 Admittance controller:
+
 ```bash
 ros2 launch admittance_controller mobile_ur5e.launch.py
 ```
 
 Admittance interface:
+
 ```bash
 ros2 run admittance_controller admittance_menu_node --ros-args -p manipulator_name:=mobile_manipulator
 ```
 
 ---
 
-## Practical test example
+## 6. Running the Controller
 
-1) Run the node
+### 6.1 Standard Launch
 
 ```bash
 ros2 launch wbqp_controller wbqp_controller.launch.py
 ```
 
-2) Enable or disable the control through the menu:
+Enable or disable control with the menu:
 
 ```bash
 ros2 run wbqp_controller wbqp_menu
 ```
 
-3) Publish tcp pose in the global _map_ frame
+Publish TCP pose in global `map` frame:
+
 ```bash
 ros2 run wbqp_controller tcp_pose_converter
 ```
 
-4) Send a simple EE twist
+Send a simple EE twist:
 
 ```bash
-ros2 topic pub /mobile_manipulator/cmd_vel geometry_msgs/Twist "{linear: {x: 0.1, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" -r 10
+ros2 topic pub /mobile_manipulator/cmd_vel geometry_msgs/Twist \
+"{linear: {x: 0.1, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" -r 10
 ```
 
-5) Observe outputs
+Observe outputs:
 
 ```bash
 ros2 topic echo /cmd_vel
@@ -139,11 +157,52 @@ ros2 topic echo /manipulator/js_cmd_vel
 ros2 topic echo /base_pose
 ```
 
-TFs can be inspected with tools like `tf2_tools` or `rviz2` .
+Inspect TFs with tools like `tf2_tools` or `rviz2`.
 
 ---
 
-## Disclaimer
+## 7. Debug Mode (Manual Inputs & Menu)
 
-Contact the maintainer Italo Almirante for any issue with the pkg or for collabs.
+For development and testing, you can run the controller directly in a terminal and inject your own inputs.
 
+1. Load params from the installed config file:
+
+```bash
+PARAMS="$(ros2 pkg prefix wbqp_controller)/share/wbqp_controller/config/wbqp_params.yaml"
+
+ros2 run wbqp_controller wbqp_controller \
+  --ros-args \
+  --params-file "$PARAMS"
+```
+
+2. A **menu** will appear in the terminal. Use it to:
+
+   * Set joint positions (degrees, converted internally to radians)
+   * Set base translation/orientation
+   * Set desired twist
+   * Step the solver **one iteration at a time**
+
+### Example Debug Workflow
+
+* Run the node as above.
+* In the menu, press **1** → enter 6 joint angles (deg).
+* Press **2** → enter base orientation (Euler angles in deg).
+* Press **7** → step once and compute outputs.
+* Observe results in the terminal or echo the published topics.
+
+This is useful for profiling, checking timing, and debugging solver behavior without requiring real sensors or teleop inputs.
+
+### Example Whole-Body Control
+
+You can run all the above mentioned files (without interfaces) with the following command:
+
+```bash
+ros2 launch wbqp_controller wb_ur5e_admittance.launch.py real:=true joy:=true gui:=true
+```
+
+---
+
+## 8. Disclaimer
+
+Maintained by **Italo Almirante**.
+For issues or collaboration opportunities, please contact the maintainer.
