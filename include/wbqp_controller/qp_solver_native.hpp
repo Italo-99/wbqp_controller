@@ -23,13 +23,13 @@ namespace wbqp
 
         // Velocity limits
         static constexpr double max_dotq   = 1.0; // joints
-        static constexpr double max_V      = 0.5; // per‑axis box for Vx,Vy
-        static constexpr double max_Omegaz = 0.5;
+        static constexpr double max_V      = 0.2; // per‑axis box for Vx,Vy
+        static constexpr double max_Omegaz = 0.2;
 
         // Acceleration limits (rate on decision vars) — enforced as linear ineq
-        static constexpr double qddot_max = 1.0; // joints
-        static constexpr double a_lin_max = 0.5; // Vx,Vy
-        static constexpr double alpha_max = 0.5; // Omegaz
+        static constexpr double qddot_max = 2.0; // joints
+        static constexpr double a_lin_max = 1.0; // Vx,Vy
+        static constexpr double alpha_max = 1.0; // Omegaz
     };
 
     // Small POD for inputs (kept flat so your node doesn’t need to build big structs)

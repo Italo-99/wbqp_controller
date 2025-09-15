@@ -54,6 +54,7 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
 
     pub_cmd_vel_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_cmd_vel_, 1);
     pub_q_speed_  = this->create_publisher<sensor_msgs::msg::JointState>(topic_q_speed_, 1);
+    pub_arm_vel_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_arm_vel_, 1);
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
@@ -91,12 +92,14 @@ void WbqpControllerNode::check_params()
   this->declare_parameter("topics.twist_cmd",   "/mobile_manipulator/cmd_vel");
   this->declare_parameter("topics.cmd_vel",     "/cmd_vel");
   this->declare_parameter("topics.q_speed",     "/manipulator/js_cmd_vel");
+  this->declare_parameter("topics.arm_vel",     "/manipulator/cmd_vel");
   this->declare_parameter("control.dt",          0.02);
 
   topic_joint_state_ = this->get_parameter("topics.joint_state").as_string();
   topic_twist_cmd_   = this->get_parameter("topics.twist_cmd").as_string();
   topic_cmd_vel_     = this->get_parameter("topics.cmd_vel").as_string();
   topic_q_speed_     = this->get_parameter("topics.q_speed").as_string();
+  topic_arm_vel_     = this->get_parameter("topics.arm_vel").as_string();
   dt_                = this->get_parameter("control.dt").as_double();
 
   // --- Frames ---
@@ -292,6 +295,7 @@ bool WbqpControllerNode::loopStep()
 
     integrateAndPublishBase(x_opt);
     publishOutputs(x_opt);
+    publishArmTwist(in.J, x_opt);
 
     return true;
 }
@@ -430,20 +434,23 @@ void WbqpControllerNode::integrateAndPublishBase(const double x_opt[9])
     const double Vx_b = x_opt[6];
     const double Vy_b = x_opt[7];
     const double wz   = x_opt[8];
+
+    // Update base pose
+    // x_base_    += Vx_b * dt_;
+    // y_base_    += Vy_b * dt_;
+    theta_W2N_[2] += wz   * dt_;
+    theta_W2N_[2] = std::atan2(std::sin(theta_W2N_[2]), std::cos(theta_W2N_[2]));
+
+    // Convert results in world frame
     const double th   = theta_W2N_[2];
     const double c    = std::cos(th);
     const double s    = std::sin(th);
 
-    // Compute x and y velocities in world frame
-    const double vx_w = c * Vx_b - s * Vy_b;
-    const double vy_w = s * Vx_b + c * Vy_b;
+    // Compute x and y velocities
+    const double vx_w = +c * Vx_b + s * Vy_b;
+    const double vy_w = -s * Vx_b + c * Vy_b;
     x_base_          += vx_w * dt_;
     y_base_          += vy_w * dt_;
-
-    // Update base pose
-    // x_base_       += Vx_b * dt_;
-    // y_base_       += Vy_b * dt_;
-    theta_W2N_[2] += wz   * dt_;
 
     // Publish results
     publishBaseState();
@@ -502,9 +509,34 @@ void WbqpControllerNode::publishOutputs(const double x_opt[9])
 
 geometry_msgs::msg::Quaternion WbqpControllerNode::quatFromRPY(double r, double p, double y)
 {
-    tf2::Quaternion q; q.setRPY(r, p, y);
+    tf2::Quaternion q; q.setRPY(r, p, y); q.normalize();
     geometry_msgs::msg::Quaternion out; out.x=q.x(); out.y=q.y(); out.z=q.z(); out.w=q.w();
     return out;
+}
+
+void WbqpControllerNode::publishArmTwist(const double J6x9_colmajor[54],
+                                         const double qdot9[9]) const
+{
+    using Mat6x6 = Eigen::Matrix<double, 6, 6, Eigen::ColMajor>;
+    using Vec6   = Eigen::Matrix<double, 6, 1>;
+
+    // Map without copying: first 6 columns of J (col-major) are contiguous,
+    // and the first 6 elements of qdot are the arm joints.
+    const Eigen::Map<const Mat6x6> J_arm(J6x9_colmajor);  // J(:, 0..5)
+    const Eigen::Map<const Vec6>   qdot_arm(qdot9);       // qdot(0..5)
+
+    Vec6 v_arm;
+    v_arm.noalias() = J_arm * qdot_arm;  // 6x6 * 6x1
+
+    geometry_msgs::msg::Twist msg{};
+    msg.linear.x  = v_arm(0);
+    msg.linear.y  = v_arm(1);
+    msg.linear.z  = v_arm(2);
+    msg.angular.x = v_arm(3);
+    msg.angular.y = v_arm(4);
+    msg.angular.z = v_arm(5);
+
+    pub_arm_vel_->publish(msg);
 }
 
 // ------------------------------ SPINNER ----------------------------- //
@@ -632,7 +664,7 @@ void WbqpControllerNode::declare_and_setup_debug_params_()
     );
 
     // Start menu thread if enabled
-    start_menu_thread_();
+    if (console_menu_) {start_menu_thread_();}
 }
 
 void WbqpControllerNode::apply_params_()

@@ -18,6 +18,7 @@
       twist_cmd:   "/mobile_manipulator/cmd_vel"  # twist command topic for the whole body platform
       cmd_vel:     "/cmd_vel"                     # command velocity topic for the mobile base
       q_speed:     "/manipulator/js_cmd_vel"      # joint speed topic for the manipulator
+      arm_vel:     "/manipulator/cmd_vel"         # arm speed topic
 
     control:
       dt: 0.02                                    # control period

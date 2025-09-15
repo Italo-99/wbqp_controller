@@ -97,6 +97,7 @@ private:
     void publishBaseState();
     void publishStaticBaseToBaseLink();
     static geometry_msgs::msg::Quaternion quatFromRPY(double r, double p, double y);
+    void publishArmTwist(const double J6x9_colmajor[54],const double qdot9[9]) const;
 
     // Config handlers
     void check_params();
@@ -114,6 +115,7 @@ private:
     std::string topic_twist_cmd_;
     std::string topic_cmd_vel_;
     std::string topic_q_speed_;
+    std::string topic_arm_vel_;
     double dt_;
 
     // Native qp
@@ -157,6 +159,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_twist_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_q_speed_;
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_arm_vel_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_base_pose_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
