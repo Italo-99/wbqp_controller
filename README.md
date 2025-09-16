@@ -63,7 +63,7 @@ Includes:
 Run a planner (disable publishing joint states if you are using the real robot):
 
 ```bash
-ros2 launch manipulators ur5e_eecam.launch.py publish_joint_states:=True xacro_args:='camera:=false gripper:=false gfloor:=false gripper_collision_box:=true'
+ros2 launch manipulators ur5e_eecam.launch.py publish_joint_states:=False xacro_args:='camera:=false gripper:=false gfloor:=false gripper_collision_box:=true tcp_gripper:=0.08'
 ```
 
 Manipulator menu:
@@ -91,7 +91,7 @@ ros2 launch ur_rtde_controller rtde_controller.launch.py enable_gripper:=false R
 Joystick teleop for the arm:
 
 ```bash
-ros2 launch manipulators joystick_controller.launch.py --ros-args -r manipulator/cmd_vel:=/mobile_manipulator/cmd_vel
+ros2 launch manipulators joystick_controller.launch.py
 ```
 
 Keyboard teleop for the whole-body platform:

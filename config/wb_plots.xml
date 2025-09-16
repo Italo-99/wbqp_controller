@@ -1,45 +1,46 @@
 <?xml version='1.0' encoding='UTF-8'?>
 <root>
  <tabbed_widget parent="main_window" name="Main Window">
-  <Tab containers="1" tab_name="tab1">
+  <Tab tab_name="tab1" containers="1">
    <Container>
     <DockSplitter orientation="-" sizes="1" count="1">
      <DockSplitter orientation="|" sizes="0.5;0.5" count="2">
-      <DockSplitter orientation="-" sizes="0.500566;0.499434" count="2">
+      <DockSplitter orientation="-" sizes="0.500717;0.499283" count="2">
        <DockArea name="...">
-        <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
-         <range bottom="-0.207173" right="798.941450" left="793.943100" top="2.173628"/>
+        <plot flip_y="false" flip_x="false" mode="TimeSeries" style="Lines">
+         <range left="1072.671807" bottom="-0.100000" right="1077.671761" top="0.100000"/>
          <limitY/>
-         <curve color="#ff7f0e" name="/manipulator/cmd_vel/linear/x"/>
-         <curve color="#f14cc1" name="/manipulator/cmd_vel/linear/y"/>
-         <curve color="#9467bd" name="/manipulator/cmd_vel/angular/z"/>
+         <curve name="/mobile_manipulator/cmd_vel/linear/x" color="#17becf"/>
+         <curve name="/mobile_manipulator/cmd_vel/linear/y" color="#bcbd22"/>
+         <curve name="/mobile_manipulator/cmd_vel/linear/z" color="#1f77b4"/>
+         <curve name="/mobile_manipulator/cmd_vel/angular/z" color="#d62728"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
-         <range bottom="-0.100000" right="798.920037" left="794.019871" top="0.100000"/>
+        <plot flip_y="false" flip_x="false" mode="TimeSeries" style="Lines">
+         <range left="1231.663742" bottom="-0.000001" right="1236.662055" top="0.000001"/>
          <limitY/>
-         <curve color="#17becf" name="/mobile_manipulator/cmd_vel/linear/x"/>
-         <curve color="#bcbd22" name="/mobile_manipulator/cmd_vel/linear/y"/>
-         <curve color="#1f77b4" name="/mobile_manipulator/cmd_vel/angular/z"/>
+         <curve name="/manipulator/cmd_vel/linear/x" color="#ff7f0e"/>
+         <curve name="/manipulator/cmd_vel/linear/y" color="#f14cc1"/>
+         <curve name="/manipulator/cmd_vel/linear/z" color="#9467bd"/>
         </plot>
        </DockArea>
       </DockSplitter>
-      <DockSplitter orientation="-" sizes="0.500566;0.499434" count="2">
+      <DockSplitter orientation="-" sizes="0.500717;0.499283" count="2">
        <DockArea name="...">
-        <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
-         <range bottom="-0.210033" right="798.941328" left="793.943030" top="0.171424"/>
+        <plot flip_y="false" flip_x="false" mode="TimeSeries" style="Lines">
+         <range left="317.515261" bottom="-0.100000" right="322.515003" top="0.100000"/>
          <limitY/>
-         <curve color="#d62728" name="/cmd_vel/linear/x"/>
-         <curve color="#1ac938" name="/cmd_vel/linear/y"/>
-         <curve color="#ff7f0e" name="/cmd_vel/angular/z"/>
+         <curve name="/cmd_vel/linear/x" color="#1f77b4"/>
+         <curve name="/cmd_vel/linear/y" color="#d62728"/>
+         <curve name="/cmd_vel/angular/z" color="#1ac938"/>
         </plot>
        </DockArea>
        <DockArea name="...">
-        <plot style="Lines" flip_y="false" flip_x="false" mode="TimeSeries">
-         <range bottom="0.567835" right="798.941195" left="793.941195" top="0.869845"/>
+        <plot flip_y="false" flip_x="false" mode="TimeSeries" style="Lines">
+         <range left="358.220664" bottom="-0.128664" right="363.219897" top="0.071336"/>
          <limitY/>
-         <curve color="#f14cc1" name="/mobile_manipulator/base_pose/pose/orientation/yaw"/>
+         <curve name="/mobile_manipulator/base_pose/pose/orientation/yaw" color="#f14cc1"/>
         </plot>
        </DockArea>
       </DockSplitter>
@@ -88,7 +89,6 @@
  </Plugins>
  <!-- - - - - - - - - - - - - - - -->
  <previouslyLoaded_Datafiles/>
- <previouslyLoaded_Streamer name="ROS2 Topic Subscriber"/>
  <!-- - - - - - - - - - - - - - - -->
  <customMathEquations/>
  <snippets/>
