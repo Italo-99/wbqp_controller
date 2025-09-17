@@ -19,13 +19,13 @@ def generate_launch_description():
         description="If true, launch joystick controller."
     )
     gui_arg = DeclareLaunchArgument(
-        "gui", default_value="true",
-        description="If true, launch sirio_arm_gui."
+        "gui_arm", default_value="true",
+        description="If true, launch arm_gui."
     )
 
     real = LaunchConfiguration("real")
     joy = LaunchConfiguration("joy")
-    gui = LaunchConfiguration("gui")
+    gui_arm = LaunchConfiguration("gui_arm")
 
     # Package share paths
     pkg_manip = get_package_share_directory("manipulators")
@@ -40,8 +40,8 @@ def generate_launch_description():
             os.path.join(pkg_manip, "launch", "ur5e_eecam.launch.py")
         ),
         launch_arguments={
-            "publish_joint_states": PythonExpression(["'false'" if real == "true" else "'true'"]),
-            "xacro_args": "'camera:=false gripper:=false gfloor:=false gripper_collision_box:=true'",
+            "publish_joint_states": PythonExpression(["'False'" if real == "True" else "'True'"]),
+            "xacro_args": "camera:=false gripper:=false gfloor:=false gripper_collision_box:=true tcp_gripper:=0.08",
         }.items()
     )
 
@@ -62,7 +62,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "enable_gripper": "false",
-            "ROBOT_IP": "192.168.137.102",
+            "ROBOT_IP": "192.168.2.30",
         }.items(),
         condition=IfCondition(real),
     )
@@ -87,7 +87,7 @@ def generate_launch_description():
         remappings=[
             ("/manipulator/tcp_force", "/mobile_manipulator/filtered_wrench"),
         ],
-        condition=IfCondition(gui),
+        condition=IfCondition(gui_arm),
     )
 
     # 5) Admittance controller (always, per your sequence)

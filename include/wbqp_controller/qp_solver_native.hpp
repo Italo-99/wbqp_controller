@@ -40,9 +40,9 @@ namespace wbqp
         std::array<double,6>  u_star{};         // desired ee twist in WORLD [vx vy vz wx wy wz]
         std::array<double,6>  q{};              // current joints
         std::array<double,9>  dotq_prev{};      // last cycle solution [dq(6), Vx, Vy, Omegaz]
-        double                dt{0.005};
-        std::array<double,6>  qmin{ {-0.1745, -2.0944, -2.3562, -2.3562, -0.0000, -1.5708} };
-        std::array<double,6>  qmax{ {+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +1.5708} };
+        double                dt{0.002};
+        std::array<double,6>  qmin{ {-0.0000, -2.0944, -2.3562, -2.3562, -0.0000, -3.1416} };
+        std::array<double,6>  qmax{ {+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +3.1416} };
     };
 
     // Output z* = [dq1..dq6, Vx, Vy, Omegaz]

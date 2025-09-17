@@ -21,7 +21,7 @@
       arm_vel:     "/manipulator/cmd_vel"         # arm speed topic
 
     control:
-      dt: 0.005                                   # control period
+      dt: 0.002                                   # control period
 
     qp:
       use_native: true                            # use native qp solver (true) or matlab generated (false)
@@ -37,8 +37,8 @@
       max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
 
     limits:
-      qmin: [-0.1745, -2.0944, -2.3562, -2.3562, -0.0000, -1.5708]  # joint position limits (rad) min boundaries [-10 -120 -135 -135  -0 -180]
-      qmax: [+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +1.5708]  # joint position limits (rad) max boundaries [+90  -85    0   90 110  180]
+      qmin: [-0.0000, -2.0944, -2.3562, -2.3562, -0.0000, -3.1416]  # joint position limits (rad) min boundaries [-10 -120 -135 -135  -0 -180]
+      qmax: [+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +3.1416]  # joint position limits (rad) max boundaries [+90  -85    0   90 110  180]
       qddot_max: 2.0                              # maximum joint acceleration (rad/s^2)
       a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)
       alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
@@ -50,4 +50,4 @@
     frames:
       map:       "map"                            # fixed world frame 
       base:      "mobile_base"                    # mobile base frame
-      base_link: "world_ur"                       # manipulator base link frame
+      base_link: "base_link"                       # manipulator base link frame (world_ur for sim, base_link for real robot)
