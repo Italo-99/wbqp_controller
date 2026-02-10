@@ -31,6 +31,9 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     // --- Params ---
     check_params();
 
+    // --- Init C++ kinematics (wb_jac) if enabled ---
+    initKinematics();
+
     // Build cfg and run wbqp_init once
     struct10_T cfg{};
     fillCfgStruct(cfg);
@@ -52,9 +55,14 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     sub_twist_ = this->create_subscription<geometry_msgs::msg::Twist>(
         topic_twist_cmd_, 1, std::bind(&WbqpControllerNode::twistCmdCb, this, std::placeholders::_1), sub_options);
 
-    pub_cmd_vel_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_cmd_vel_, 1);
-    pub_q_speed_  = this->create_publisher<sensor_msgs::msg::JointState>(topic_q_speed_, 1);
-    pub_arm_vel_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_arm_vel_, 1);
+    auto cb_group_sub_arm_vel = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    sub_options.callback_group = cb_group_sub_arm_vel;
+    sub_arm_vel_ = this->create_subscription<geometry_msgs::msg::Twist>(
+        topic_arm_vel_, 1, std::bind(&WbqpControllerNode::armVelCb, this, std::placeholders::_1), sub_options);
+
+    pub_cmd_vel_      = this->create_publisher<geometry_msgs::msg::Twist>(topic_cmd_vel_, 1);
+    pub_q_speed_      = this->create_publisher<sensor_msgs::msg::JointState>(topic_q_speed_, 1);
+    pub_arm_vel_cmd_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_arm_vel_cmd_, 1);
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
@@ -93,6 +101,7 @@ void WbqpControllerNode::check_params()
   this->declare_parameter("topics.cmd_vel",     "/cmd_vel");
   this->declare_parameter("topics.q_speed",     "/manipulator/js_cmd_vel");
   this->declare_parameter("topics.arm_vel",     "/manipulator/cmd_vel");
+  this->declare_parameter("topics.arm_vel_cmd", "/manipulator/cmd_vel");
   this->declare_parameter("control.dt",          0.02);
 
   topic_joint_state_ = this->get_parameter("topics.joint_state").as_string();
@@ -100,6 +109,7 @@ void WbqpControllerNode::check_params()
   topic_cmd_vel_     = this->get_parameter("topics.cmd_vel").as_string();
   topic_q_speed_     = this->get_parameter("topics.q_speed").as_string();
   topic_arm_vel_     = this->get_parameter("topics.arm_vel").as_string();
+  topic_arm_vel_cmd_ = this->get_parameter("topics.arm_vel_cmd").as_string();
   dt_                = this->get_parameter("control.dt").as_double();
 
   // --- Frames ---
@@ -127,6 +137,32 @@ void WbqpControllerNode::check_params()
   // --- Qp solver type ---
   this->declare_parameter<bool>("qp.use_native", true);
   use_native_qp_ = this->get_parameter("qp.use_native").as_bool();
+
+  // --- C++ Jacobian parameters ---
+  this->declare_parameter<bool>("jacobian.use_jac_ros2", false);
+  this->declare_parameter<bool>("jacobian.jac_to_world", false);
+  use_jac_ros2_ = this->get_parameter("jacobian.use_jac_ros2").as_bool();
+  jac_to_world_ = this->get_parameter("jacobian.jac_to_world").as_bool();
+
+  // --- DH parameters (6 joints: a, d, alpha) ---
+  const std::array<std::string, 6> joint_names = {"joint1","joint2","joint3","joint4","joint5","joint6"};
+  // UR5e defaults
+  const std::array<double, 6> default_a     = { 0.0,    -0.425, -0.3922,  0.0,    0.0,    0.0   };
+  const std::array<double, 6> default_d     = { 0.1625,  0.0,    0.0,     0.1333, 0.0997, 0.0996};
+  const std::array<double, 6> default_alpha = { M_PI/2,  0.0,    0.0,     M_PI/2,-M_PI/2, 0.0   };
+  for (int i = 0; i < 6; ++i) {
+    this->declare_parameter("kinematics.dh." + joint_names[i] + ".a",     default_a[i]);
+    this->declare_parameter("kinematics.dh." + joint_names[i] + ".d",     default_d[i]);
+    this->declare_parameter("kinematics.dh." + joint_names[i] + ".alpha", default_alpha[i]);
+    dh_params_[i].a     = this->get_parameter("kinematics.dh." + joint_names[i] + ".a").as_double();
+    dh_params_[i].d     = this->get_parameter("kinematics.dh." + joint_names[i] + ".d").as_double();
+    dh_params_[i].alpha = this->get_parameter("kinematics.dh." + joint_names[i] + ".alpha").as_double();
+  }
+
+  // --- TCP offset [tx, ty, tz, rx, ry, rz] ---
+  this->declare_parameter("kinematics.tcp_offset", std::vector<double>{0,0,0,0,0,0});
+  auto tcp = this->get_parameter("kinematics.tcp_offset").as_double_array();
+  for (int i = 0; i < 6 && i < (int)tcp.size(); ++i) { tcp_offset_[i] = tcp[i]; }
 
   // Log correctly loaded params
   RCLCPP_INFO(this->get_logger(), "Parameters loaded.");
@@ -194,6 +230,21 @@ void WbqpControllerNode::print_params(const struct10_T &cfg)
     qmax_ss << "]";
     RCLCPP_INFO(this->get_logger(), "qmin = %s", qmin_ss.str().c_str());
     RCLCPP_INFO(this->get_logger(), "qmax = %s", qmax_ss.str().c_str());
+
+    // --- Jacobian mode ---
+    RCLCPP_INFO(this->get_logger(), "Jacobian:");
+    RCLCPP_INFO(this->get_logger(), "  use_jac_ros2 = %s", use_jac_ros2_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  jac_to_world = %s", jac_to_world_ ? "true" : "false");
+    if (use_jac_ros2_) {
+        RCLCPP_INFO(this->get_logger(), "  DH parameters:");
+        for (int i = 0; i < 6; ++i) {
+            RCLCPP_INFO(this->get_logger(), "    joint%d: a=%.4f  d=%.4f  alpha=%.4f",
+                        i+1, dh_params_[i].a, dh_params_[i].d, dh_params_[i].alpha);
+        }
+        RCLCPP_INFO(this->get_logger(), "  TCP offset: [%.4f, %.4f, %.4f, %.4f, %.4f, %.4f]",
+                    tcp_offset_[0], tcp_offset_[1], tcp_offset_[2],
+                    tcp_offset_[3], tcp_offset_[4], tcp_offset_[5]);
+    }
 
     RCLCPP_INFO(this->get_logger(), "--------------------------");
 }
@@ -263,15 +314,34 @@ bool WbqpControllerNode::loopStep()
         }
     }
 
-    // --- Your existing pipeline ---
-    double in1[15];
-    buildIn15(in1);
-
-    double A6x12_colmajor[72];
-    WholeBodyJacobian(in1, A6x12_colmajor);
-
+    // --- Jacobian computation ---
     struct1_T in{};
-    fillInputStruct(in, A6x12_colmajor);
+
+    if (use_jac_ros2_)
+    {
+        // C++ Jacobian path (wb_jac)
+        double J6x9_colmajor[54];
+        computeJacobianRos2(J6x9_colmajor);
+
+        // Fill input struct directly with the 6x9 Jacobian
+        std::memset(&in, 0, sizeof(in));
+        for (int i = 0; i < 54; ++i) { in.J[i] = J6x9_colmajor[i]; }
+        for (int i = 0; i < 6; ++i) { in.q[i] = q_pos_[i]; }
+        for (int i = 0; i < 6; ++i) { in.u_star[i] = u_star_[i]; }
+        for (int i = 0; i < 9; ++i) { in.dotq_prev[i] = dotq_prev_[i]; }
+        in.dt = dt_;
+    }
+    else
+    {
+        // MATLAB codegen path
+        double in1[15];
+        buildIn15(in1);
+
+        double A6x12_colmajor[72];
+        WholeBodyJacobian(in1, A6x12_colmajor);
+
+        fillInputStruct(in, A6x12_colmajor);
+    }
 
     double x_opt[9];
     if (use_native_qp_)
@@ -324,6 +394,12 @@ void WbqpControllerNode::twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr m
     u_star_[0]=msg->linear.x;  u_star_[1]=msg->linear.y;  u_star_[2]=msg->linear.z;
     u_star_[3]=msg->angular.x; u_star_[4]=msg->angular.y; u_star_[5]=msg->angular.z;
     have_twist_ = true;
+}
+
+void WbqpControllerNode::armVelCb(const geometry_msgs::msg::Twist::SharedPtr msg)
+{
+    arm_vel_[0]=msg->linear.x;  arm_vel_[1]=msg->linear.y;  arm_vel_[2]=msg->linear.z;
+    arm_vel_[3]=msg->angular.x; arm_vel_[4]=msg->angular.y; arm_vel_[5]=msg->angular.z;
 }
 
 void WbqpControllerNode::onEnableQp(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
@@ -417,6 +493,60 @@ void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
             J6x9_colmajor[r + 6*j] = J6x12_colmajor[r + 6*src_c];
         }
     }
+}
+
+// ------------------- C++ JACOBIAN (wb_jac) ------------------- //
+void WbqpControllerNode::initKinematics()
+{
+    if (!use_jac_ros2_) return;
+
+    // Set DH params from config
+    kin_.setDH(dh_params_);
+
+    // Set fixed transform N->B from P_N2B and theta_N2B (RPY)
+    const double cr = std::cos(theta_N2B_[0]), sr = std::sin(theta_N2B_[0]);
+    const double cp = std::cos(theta_N2B_[1]), sp = std::sin(theta_N2B_[1]);
+    const double cy = std::cos(theta_N2B_[2]), sy = std::sin(theta_N2B_[2]);
+
+    Eigen::Matrix3d R_NB;
+    R_NB << cy*cp,  cy*sp*sr - sy*cr,  cy*sp*cr + sy*sr,
+            sy*cp,  sy*sp*sr + cy*cr,  sy*sp*cr - cy*sr,
+              -sp,        cp*sr,              cp*cr;
+
+    Eigen::Vector3d p_NB(P_N2B_[0], P_N2B_[1], P_N2B_[2]);
+    kin_.setFixedTransformNB(R_NB, p_NB);
+
+    // Set TCP offset
+    kin_.setTcpOffset(tcp_offset_[0], tcp_offset_[1], tcp_offset_[2],
+                      tcp_offset_[3], tcp_offset_[4], tcp_offset_[5]);
+
+    RCLCPP_INFO(this->get_logger(), "C++ Jacobian (wb_jac) initialized [%s frame].",
+                jac_to_world_ ? "world" : "body");
+}
+
+void WbqpControllerNode::computeJacobianRos2(double J6x9_colmajor[54]) const
+{
+    Eigen::Matrix<double, 6, 1> q;
+    for (int i = 0; i < 6; ++i) q(i) = q_pos_[i];
+
+    Eigen::Matrix<double, 6, 9> J;
+
+    if (jac_to_world_)
+    {
+        MobileManipulatorKinematics::BasePose2D basePose;
+        basePose.px  = x_base_;
+        basePose.py  = y_base_;
+        basePose.yaw = theta_W2N_[2];
+        J = kin_.jacobianWorld(q, basePose);
+    }
+    else
+    {
+        J = kin_.jacobianBody(q);
+    }
+
+    // Store in column-major order (Eigen default is ColMajor)
+    Eigen::Map<Eigen::Matrix<double, 6, 9, Eigen::ColMajor>> J_out(J6x9_colmajor);
+    J_out = J;
 }
 
 // ------------------- NATIVE OPTIMIZER CONFIGURATION ------------------- //
@@ -543,7 +673,7 @@ void WbqpControllerNode::publishArmTwist(const double J6x9_colmajor[54],
     msg.angular.y = v_arm(4);
     msg.angular.z = v_arm(5);
 
-    pub_arm_vel_->publish(msg);
+    pub_arm_vel_cmd_->publish(msg);
 }
 
 bool WbqpControllerNode::checkXoptValues(const double x_opt[9]) const

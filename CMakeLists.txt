@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(wbqp_controller)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 
 # Consume catkin vars if a tool passes them, to avoid "unused variable" warnings
 set(CATKIN_INSTALL_INTO_PREFIX_ROOT OFF CACHE BOOL "Compatibility var (ignored)")

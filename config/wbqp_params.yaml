@@ -17,8 +17,9 @@
       joint_state: "/joint_states"                # joint state topic for the robotic arm
       twist_cmd:   "/mobile_manipulator/cmd_vel"  # twist command topic for the whole body platform
       cmd_vel:     "/cmd_vel"                     # command velocity topic for the mobile base
-      q_speed:     "/manipulator/js_cmd_vel"      # joint speed topic for the manipulator
-      arm_vel:     "/manipulator/cmd_vel"         # arm speed topic
+      q_speed:     "/manipulator/js_cmd_vel"      # joint speed command topic for the manipulator (output)
+      arm_vel:     "/manipulator/cmd_vel"         # arm twist sensing topic (input)
+      arm_vel_cmd: "/manipulator/cmd_vel"         # arm twist command topic computed from joint speeds (output)
 
     control:
       dt: 0.002                                   # control period
@@ -43,9 +44,25 @@
       a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)
       alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
 
+    jacobian:
+      use_jac_ros2: true                          # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian (default: false, true still not tested)
+      jac_to_world: false                         # (only when use_jac_ros2==true) true => world-frame Jacobian; false => body-frame Jacobian
+
     kinematics:
       P_N2B:     [0.187, 0.0, 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z)
       theta_N2B: [0.0,   0.0, 0.00]               # orientation of manipulator base link in the mobile base frame (r,p,y)
+
+      # DH parameters for the arm (standard DH: a, d, alpha) - UR5e defaults
+      dh:
+        joint1: { a:  0.0,     d:  0.1625, alpha:  1.5707963 }   # pi/2
+        joint2: { a: -0.425,   d:  0.0,    alpha:  0.0       }
+        joint3: { a: -0.3922,  d:  0.0,    alpha:  0.0       }
+        joint4: { a:  0.0,     d:  0.1333, alpha:  1.5707963 }   # pi/2
+        joint5: { a:  0.0,     d:  0.0997, alpha: -1.5707963 }   # -pi/2
+        joint6: { a:  0.0,     d:  0.0996, alpha:  0.0       }
+
+      # TCP offset after the last DH frame (translation tx,ty,tz in m; rotation rx,ry,rz in rad, applied as Rz*Ry*Rx)
+      tcp_offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     frames:
       map:       "map"                            # fixed world frame 

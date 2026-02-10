@@ -22,6 +22,9 @@
 // Native solver
 #include <wbqp_controller/qp_solver_native.hpp>
 
+// C++ Jacobian (header-only)
+#include <wbqp_controller/wb_jac.hpp>
+
 // === MATLAB Coder headers from vendor package ===
 // Use __has_include to include initialize/terminate only if present.
 #include <WholeBodyJacobian.h>
@@ -72,6 +75,7 @@ private:
     // Callbacks
     void jointStateCb(const sensor_msgs::msg::JointState::SharedPtr msg);
     void twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr msg);
+    void armVelCb(const geometry_msgs::msg::Twist::SharedPtr msg);
     bool loopStep();
 
     // Services
@@ -80,6 +84,10 @@ private:
 
     // Native QP
     void solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9]);
+
+    // C++ Jacobian (wb_jac) computation
+    void computeJacobianRos2(double J6x9_colmajor[54]) const;
+    void initKinematics();  // called once after params are loaded
 
     // Builders for MATLAB inputs
     void buildIn15(double out_in1_15[15]) const; // [P_N2B(3), q(6), theta_N2B(3), theta_W2N(3)]
@@ -117,12 +125,20 @@ private:
     std::string topic_cmd_vel_;
     std::string topic_q_speed_;
     std::string topic_arm_vel_;
+    std::string topic_arm_vel_cmd_;
     double dt_;
 
     // Native qp
     bool use_native_qp_ = true;
     std::array<double,6> in_qmin_from_cfg_or_params_{};
     std::array<double,6> in_qmax_from_cfg_or_params_{};
+
+    // C++ Jacobian path
+    bool use_jac_ros2_  = false;   // if true, use MobileManipulatorKinematics instead of MATLAB codegen
+    bool jac_to_world_  = false;   // if true, jacobianWorld(); else jacobianBody()
+    MobileManipulatorKinematics kin_;  // kinematics instance
+    std::array<MobileManipulatorKinematics::DHParam, 6> dh_params_;
+    std::array<double, 6> tcp_offset_ = {0,0,0,0,0,0};
 
     // Frames & pose state
     std::string map_frame_;
@@ -142,6 +158,7 @@ private:
     double theta_W2N_[3]    = {0,0,0};
     double dotq_prev_[9]    = {0,0,0,0,0,0,0,0,0};
     double u_star_[6]       = {0,0,0,0,0,0};
+    double arm_vel_[6]      = {0,0,0,0,0,0};  // latest arm twist from sensing
     bool have_js_           = false;
     bool have_twist_        = false;
     bool qp_enabled_        = false;
@@ -158,9 +175,10 @@ private:
     // ROS I/O
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_js_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_twist_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_arm_vel_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_q_speed_;
-    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_arm_vel_;
+    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_arm_vel_cmd_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_base_pose_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
