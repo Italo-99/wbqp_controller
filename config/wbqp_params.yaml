@@ -40,18 +40,18 @@
       max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
 
     limits:
-      qmin: [90.0, -115.0, 60.0, 110.0, 180.0, -180.0]      # joint position limits min boundaries [deg]
-      qmax: [180.0, -85.0, 150.0, 280.0, 300.0, 180.0]      # joint position limits max boundaries [deg]
+      qmin: [ 90.0, -115.0, 60.0, 110.0, 180.0, -180.0] # joint position limits min boundaries [deg]
+      qmax: [180.0, -85.0, 150.0, 280.0, 300.0,  180.0] # joint position limits max boundaries [deg]
 
-      # qmin: [  0.0, -120.0, -135.0, -135.0,   0.0, -180.0]  # OLD VALUES
-      # qmax: [ 90.0,  -85.0,    0.0,   90.0, 110.0,  180.0]  # OLD VALUES
+      # qmin: [ 0.0, -120.0, -135.0, -135.0,   0.0, -180.0]  # OLD VALUES
+      # qmax: [90.0,  -85.0,    0.0,   90.0, 110.0,  180.0]  # OLD VALUES
       
       qddot_max: 2.0                              # maximum joint acceleration (rad/s^2)
       a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)
       alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
 
     jacobian:
-      use_jac_ros2: false                          # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian (default: false, true still not tested)
+      use_jac_ros2: false                         # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian (default: false, true still not tested)
       jac_to_world: false                         # (only when use_jac_ros2==true) true => world-frame Jacobian; false => body-frame Jacobian
 
     kinematics:
@@ -60,7 +60,7 @@
 
       # DH parameters for the arm (standard DH: a, d, alpha) - UR5e defaults
       dh:
-        joint1: { a:  0.0,     d:  0.1625, alpha:  1.5707963 }   # pi/2
+        joint1: { a:  0.0,     d:  0.1625, alpha:  1.5707963 }   # pi/2 or 0.0 depending on the convention for the first joint (rotation around z)
         joint2: { a: -0.425,   d:  0.0,    alpha:  0.0       }
         joint3: { a: -0.3922,  d:  0.0,    alpha:  0.0       }
         joint4: { a:  0.0,     d:  0.1333, alpha:  1.5707963 }   # pi/2
