@@ -20,6 +20,7 @@
       q_speed:     "/manipulator/js_cmd_vel"      # joint speed command topic for the manipulator (output)
       arm_vel:     "/manipulator/cmd_vel"         # arm twist sensing topic (input)
       arm_vel_cmd: "/manipulator/cmd_vel"         # arm twist command topic computed from joint speeds (output)
+      emergency_state: "/mobile_platform/emergency_stop_active" # published emergency latch state (true/false)
     services:
       emergency_stop: "/mobile_platform/emergency_stop"  # true => publish zero commands, false => normal execution
 
@@ -40,11 +41,14 @@
       max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
 
     limits:
-      qmin: [ 90.0, -115.0, 60.0, 110.0, 180.0, -180.0] # joint position limits min boundaries [deg]
-      qmax: [180.0, -85.0, 150.0, 280.0, 300.0,  180.0] # joint position limits max boundaries [deg]
 
-      # qmin: [ 0.0, -120.0, -135.0, -135.0,   0.0, -180.0]  # OLD VALUES
-      # qmax: [90.0,  -85.0,    0.0,   90.0, 110.0,  180.0]  # OLD VALUES
+      # Joint limits boundaries [deg] for the joint1 - left configuration
+      # qmin: [ 90.0, -115.0, 60.0, 110.0, 180.0, -180.0] # min boundaries [deg]
+      # qmax: [190.0, -85.0, 150.0, 280.0, 300.0,  180.0] # max boundaries [deg]
+
+      # Joint limits boundaries [deg] for the joint1 - right configuration
+      qmin: [-10.0, -120.0, -135.0, -135.0,   0.0, -180.0]  # min boundaries [deg]
+      qmax: [ 90.0,  -85.0,    0.0,   90.0, 110.0,  180.0]  # max boundaries [deg]
       
       qddot_max: 2.0                              # maximum joint acceleration (rad/s^2)
       a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)

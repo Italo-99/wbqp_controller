@@ -4,6 +4,7 @@
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 
@@ -129,6 +130,7 @@ private:
     std::string topic_q_speed_;
     std::string topic_arm_vel_;
     std::string topic_arm_vel_cmd_;
+    std::string topic_emergency_state_;
     std::string emergency_stop_service_name_;
     double dt_;
 
@@ -184,6 +186,7 @@ private:
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_q_speed_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_arm_vel_cmd_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_emergency_state_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_base_pose_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;

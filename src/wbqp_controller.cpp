@@ -63,6 +63,7 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     pub_cmd_vel_      = this->create_publisher<geometry_msgs::msg::Twist>(topic_cmd_vel_, 1);
     pub_q_speed_      = this->create_publisher<sensor_msgs::msg::JointState>(topic_q_speed_, 1);
     pub_arm_vel_cmd_  = this->create_publisher<geometry_msgs::msg::Twist>(topic_arm_vel_cmd_, 1);
+    pub_emergency_state_ = this->create_publisher<std_msgs::msg::Bool>(topic_emergency_state_, 1);
 
     tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(this);
@@ -105,6 +106,7 @@ void WbqpControllerNode::check_params()
   this->declare_parameter("topics.q_speed",     "/manipulator/js_cmd_vel");
   this->declare_parameter("topics.arm_vel",     "/manipulator/cmd_vel");
   this->declare_parameter("topics.arm_vel_cmd", "/manipulator/cmd_vel");
+  this->declare_parameter("topics.emergency_state", "/mobile_platform/emergency_stop_active");
   this->declare_parameter("services.emergency_stop", "/mobile_platform/emergency_stop");
   this->declare_parameter("control.dt",          0.02);
 
@@ -114,6 +116,7 @@ void WbqpControllerNode::check_params()
   topic_q_speed_     = this->get_parameter("topics.q_speed").as_string();
   topic_arm_vel_     = this->get_parameter("topics.arm_vel").as_string();
   topic_arm_vel_cmd_ = this->get_parameter("topics.arm_vel_cmd").as_string();
+  topic_emergency_state_ = this->get_parameter("topics.emergency_state").as_string();
   emergency_stop_service_name_ = this->get_parameter("services.emergency_stop").as_string();
   dt_                = this->get_parameter("control.dt").as_double();
 
@@ -428,6 +431,9 @@ void WbqpControllerNode::onEmergencyStop(
     std::shared_ptr<std_srvs::srv::SetBool::Response> response)
 {
     emergency_stop_active_.store(request->data);
+    std_msgs::msg::Bool state_msg;
+    state_msg.data = request->data;
+    pub_emergency_state_->publish(state_msg);
     response->success = true;
     response->message = request->data ? "Mobile platform emergency stop enabled"
                                       : "Mobile platform emergency stop released";
@@ -658,6 +664,9 @@ void WbqpControllerNode::publishStaticBaseToBaseLink()
 void WbqpControllerNode::publishOutputs(const double x_opt[9])
 {
     const bool emergency_stop = emergency_stop_active_.load();
+    std_msgs::msg::Bool state_msg;
+    state_msg.data = emergency_stop;
+    pub_emergency_state_->publish(state_msg);
 
     geometry_msgs::msg::Twist base;
     base.linear.x  = emergency_stop ? 0.0 : x_opt[6];
