@@ -70,6 +70,9 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
 
     qp_switch_srv_ = this->create_service<std_srvs::srv::SetBool>("~/enable_qp",
             std::bind(&WbqpControllerNode::onEnableQp, this, std::placeholders::_1, std::placeholders::_2));
+    emergency_stop_srv_ = this->create_service<std_srvs::srv::SetBool>(
+        emergency_stop_service_name_,
+        std::bind(&WbqpControllerNode::onEmergencyStop, this, std::placeholders::_1, std::placeholders::_2));
 
     // Publish static TF base -> base_link once
     publishStaticBaseToBaseLink();
@@ -102,6 +105,7 @@ void WbqpControllerNode::check_params()
   this->declare_parameter("topics.q_speed",     "/manipulator/js_cmd_vel");
   this->declare_parameter("topics.arm_vel",     "/manipulator/cmd_vel");
   this->declare_parameter("topics.arm_vel_cmd", "/manipulator/cmd_vel");
+  this->declare_parameter("services.emergency_stop", "/mobile_platform/emergency_stop");
   this->declare_parameter("control.dt",          0.02);
 
   topic_joint_state_ = this->get_parameter("topics.joint_state").as_string();
@@ -110,6 +114,7 @@ void WbqpControllerNode::check_params()
   topic_q_speed_     = this->get_parameter("topics.q_speed").as_string();
   topic_arm_vel_     = this->get_parameter("topics.arm_vel").as_string();
   topic_arm_vel_cmd_ = this->get_parameter("topics.arm_vel_cmd").as_string();
+  emergency_stop_service_name_ = this->get_parameter("services.emergency_stop").as_string();
   dt_                = this->get_parameter("control.dt").as_double();
 
   // --- Frames ---
@@ -178,6 +183,7 @@ void WbqpControllerNode::print_params(const struct10_T &cfg)
     RCLCPP_INFO(this->get_logger(), "  twist_cmd   : %s", topic_twist_cmd_.c_str());
     RCLCPP_INFO(this->get_logger(), "  cmd_vel     : %s", topic_cmd_vel_.c_str());
     RCLCPP_INFO(this->get_logger(), "  q_speed     : %s", topic_q_speed_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  emergency srv: %s", emergency_stop_service_name_.c_str());
     RCLCPP_INFO(this->get_logger(), "Control dt = %.4f", dt_);
 
     // --- Frames ---
@@ -361,6 +367,12 @@ bool WbqpControllerNode::loopStep()
         for (int i=0;i<9;++i) { x_opt[i] = dotq_prev_[i]; }
     }
 
+    if (emergency_stop_active_.load()) {
+        for (double &v : x_opt) {
+            v = 0.0;
+        }
+    }
+
     for (int i=0;i<9;++i) { dotq_prev_[i] = x_opt[i]; }
 
     // Display results if in DEBUG
@@ -411,6 +423,17 @@ void WbqpControllerNode::onEnableQp(const std::shared_ptr<std_srvs::srv::SetBool
     RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
 }
 
+void WbqpControllerNode::onEmergencyStop(
+    const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+    std::shared_ptr<std_srvs::srv::SetBool::Response> response)
+{
+    emergency_stop_active_.store(request->data);
+    response->success = true;
+    response->message = request->data ? "Mobile platform emergency stop enabled"
+                                      : "Mobile platform emergency stop released";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+}
+
 // ------------------- MATLAB OPTIMIZER CONFIGURATION ------------------- //
 void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
 {
@@ -447,11 +470,15 @@ void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
     cfg.alpha_max  = this->get_parameter("qp.alpha_max").as_double();
 
     // --- Joint limits arrays ---
-    this->declare_parameter("limits.qmin", std::vector<double>{-3.14,-3.14,-3.14,-3.14,-3.14,-3.14});
-    this->declare_parameter("limits.qmax", std::vector<double>{ 3.14, 3.14, 3.14, 3.14, 3.14, 3.14});
+    this->declare_parameter("limits.qmin", std::vector<double>{-10.0, -120.0, -135.0, -135.0, 0.0, -180.0});
+    this->declare_parameter("limits.qmax", std::vector<double>{ 90.0,  -85.0,    0.0,   90.0, 110.0, 180.0});
     auto qmin = this->get_parameter("limits.qmin").as_double_array();
     auto qmax = this->get_parameter("limits.qmax").as_double_array();
-    for (int i=0;i<6;++i) { cfg.qmin[i] = qmin[i]; cfg.qmax[i] = qmax[i]; }
+    constexpr double kDegToRad = M_PI / 180.0;
+    for (int i=0;i<6;++i) {
+        cfg.qmin[i] = qmin[i] * kDegToRad;
+        cfg.qmax[i] = qmax[i] * kDegToRad;
+    }
 
     // Native qp solver: store qmin/qmax for warm start
     for (int i=0;i<6;++i) {
@@ -630,17 +657,19 @@ void WbqpControllerNode::publishStaticBaseToBaseLink()
 
 void WbqpControllerNode::publishOutputs(const double x_opt[9])
 {
+    const bool emergency_stop = emergency_stop_active_.load();
+
     geometry_msgs::msg::Twist base;
-    base.linear.x  = x_opt[6];
-    base.linear.y  = x_opt[7];
-    base.angular.z = x_opt[8];
+    base.linear.x  = emergency_stop ? 0.0 : x_opt[6];
+    base.linear.y  = emergency_stop ? 0.0 : x_opt[7];
+    base.angular.z = emergency_stop ? 0.0 : x_opt[8];
     pub_cmd_vel_->publish(base);
 
     // When you want to publish:
     sensor_msgs::msg::JointState js;
     js.header.stamp = this->now();
     js.velocity.resize(6);
-    for (int i = 0; i < 6; ++i) {js.velocity[i] = x_opt[i];}
+    for (int i = 0; i < 6; ++i) {js.velocity[i] = emergency_stop ? 0.0 : x_opt[i];}
     pub_q_speed_->publish(js);
 }
 
@@ -654,6 +683,11 @@ geometry_msgs::msg::Quaternion WbqpControllerNode::quatFromRPY(double r, double 
 void WbqpControllerNode::publishArmTwist(const double J6x9_colmajor[54],
                                          const double qdot9[9]) const
 {
+    if (emergency_stop_active_.load()) {
+        pub_arm_vel_cmd_->publish(geometry_msgs::msg::Twist{});
+        return;
+    }
+
     using Mat6x6 = Eigen::Matrix<double, 6, 6, Eigen::ColMajor>;
     using Vec6   = Eigen::Matrix<double, 6, 1>;
 

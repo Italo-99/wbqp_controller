@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstring>
 #include <cmath>
+#include <atomic>
 
 // Native solver
 #include <wbqp_controller/qp_solver_native.hpp>
@@ -81,6 +82,8 @@ private:
     // Services
     void onEnableQp(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
                          std::shared_ptr<std_srvs::srv::SetBool::Response> response);
+    void onEmergencyStop(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                         std::shared_ptr<std_srvs::srv::SetBool::Response> response);
 
     // Native QP
     void solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9]);
@@ -126,6 +129,7 @@ private:
     std::string topic_q_speed_;
     std::string topic_arm_vel_;
     std::string topic_arm_vel_cmd_;
+    std::string emergency_stop_service_name_;
     double dt_;
 
     // Native qp
@@ -162,6 +166,7 @@ private:
     bool have_js_           = false;
     bool have_twist_        = false;
     bool qp_enabled_        = false;
+    std::atomic<bool> emergency_stop_active_{false};
     geometry_msgs::msg::PoseStamped base_pose_;
     geometry_msgs::msg::TransformStamped map_base_tf_;
 
@@ -183,6 +188,7 @@ private:
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr qp_switch_srv_;
+    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr emergency_stop_srv_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     // Executor & spinner time measurement

@@ -20,6 +20,8 @@
       q_speed:     "/manipulator/js_cmd_vel"      # joint speed command topic for the manipulator (output)
       arm_vel:     "/manipulator/cmd_vel"         # arm twist sensing topic (input)
       arm_vel_cmd: "/manipulator/cmd_vel"         # arm twist command topic computed from joint speeds (output)
+    services:
+      emergency_stop: "/mobile_platform/emergency_stop"  # true => publish zero commands, false => normal execution
 
     control:
       dt: 0.002                                   # control period
@@ -38,14 +40,14 @@
       max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
 
     limits:
-      qmin: [-0.0000, -2.0944, -2.3562, -2.3562, -0.0000, -3.1416]  # joint position limits (rad) min boundaries [-10 -120 -135 -135  -0 -180]
-      qmax: [+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +3.1416]  # joint position limits (rad) max boundaries [+90  -85    0   90 110  180]
+      qmin: [-10.0, -120.0, -135.0, -135.0, 0.0, -180.0]            # joint position limits min boundaries [deg]
+      qmax: [90.0, -85.0, 0.0, 90.0, 110.0, 180.0]                  # joint position limits max boundaries [deg]
       qddot_max: 2.0                              # maximum joint acceleration (rad/s^2)
       a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)
       alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
 
     jacobian:
-      use_jac_ros2: true                          # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian (default: false, true still not tested)
+      use_jac_ros2: false                          # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian (default: false, true still not tested)
       jac_to_world: false                         # (only when use_jac_ros2==true) true => world-frame Jacobian; false => body-frame Jacobian
 
     kinematics:
