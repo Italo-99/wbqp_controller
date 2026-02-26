@@ -18,7 +18,7 @@
       twist_cmd:   "/mobile_manipulator/cmd_vel"  # twist command topic for the whole body platform
       cmd_vel:     "/cmd_vel"                     # command velocity topic for the mobile base
       q_speed:     "/manipulator/js_cmd_vel"      # joint speed command topic for the manipulator (output)
-      arm_vel:     "/manipulator/cmd_vel"         # arm twist sensing topic (input)
+      arm_vel:     "/manipulator/cmd_vel"         # arm twist sensing topic (input), default kept as cmd_vel
       arm_vel_cmd: "/manipulator/cmd_vel"         # arm twist command topic computed from joint speeds (output)
       emergency_state: "/mobile_platform/emergency_stop_active" # published emergency latch state (true/false)
     services:
@@ -28,8 +28,6 @@
       dt: 0.002                                   # control period
 
     qp:
-      use_native: true                            # use native qp solver (true) or matlab generated (false)
-      cols: [1,2,3,4,5,6,7,8,12]                  # columns of jacobian (ignore vz, wx, wy for a planar mobile base)
       beta_arm: 0.001                             # weight for the manipulator joints (regularization penalty, penalized less)  
       alpha_xy: 0.002                             # weight for the base translation (penalized more)
       alpha_yaw: 0.002                            # weight for the base rotation (penalized more)
@@ -55,8 +53,7 @@
       alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
 
     jacobian:
-      use_jac_ros2: false                         # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian (default: false, true still not tested)
-      jac_to_world: false                         # (only when use_jac_ros2==true) true => world-frame Jacobian; false => body-frame Jacobian
+      jac_to_world: false                         # true => world-frame Jacobian; false => body-frame Jacobian
 
     kinematics:
       P_N2B:     [0.187, 0.0, 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z)

@@ -27,12 +27,6 @@
 // C++ Jacobian (header-only)
 #include <wbqp_controller/wb_jac.hpp>
 
-// === MATLAB Coder headers from vendor package ===
-// Use __has_include to include initialize/terminate only if present.
-#include <WholeBodyJacobian.h>
-#include <wbqp_init.h>
-#include <wbqp_solve.h>
-
 // ------- DEBUG STRUCTS ------- //
 // In your node class (e.g., WbqpControllerNode)
 
@@ -64,6 +58,33 @@ struct DebugInputs
     bool step_once = false;
 };
 
+struct QpInput
+{
+    double J[54] = {0};
+    double q[6] = {0};
+    double u_star[6] = {0};
+    double dotq_prev[9] = {0};
+    double dt = 0.0;
+};
+
+struct QpConfig
+{
+    double beta_arm = 0.0;
+    double alpha_xy = 0.0;
+    double alpha_yaw = 0.0;
+    double w_lin = 0.0;
+    double w_ang = 0.0;
+    double nu = 0.0;
+    double max_dotq = 0.0;
+    double max_V = 0.0;
+    double max_Omegaz = 0.0;
+    double qddot_max = 0.0;
+    double a_lin_max = 0.0;
+    double alpha_max = 0.0;
+    double qmin[6] = {0};
+    double qmax[6] = {0};
+};
+
 // ------- RUNTIME CONTROLLER NODE CLASS ------- //
 class WbqpControllerNode : public rclcpp::Node {
 public:
@@ -87,21 +108,14 @@ private:
                          std::shared_ptr<std_srvs::srv::SetBool::Response> response);
 
     // Native QP
-    void solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9]);
+    void solve_qp_native(const QpInput &in, const double J6x9_colmajor[54], double x_opt[9]);
 
     // C++ Jacobian (wb_jac) computation
     void computeJacobianRos2(double J6x9_colmajor[54]) const;
     void initKinematics();  // called once after params are loaded
 
-    // Builders for MATLAB inputs
-    void buildIn15(double out_in1_15[15]) const; // [P_N2B(3), q(6), theta_N2B(3), theta_W2N(3)]
-    void fillCfgStruct(struct10_T &cfg);
-    void fillInputStruct(struct1_T &in, const double J6x12_colmajor[72]) const;
-
-    // Helpers
-    static void reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
-                                     const std::vector<int>& cols1based,
-                                     double J6x9_colmajor[54]);
+    void fillCfgStruct(QpConfig &cfg);
+    void fillInputStruct(QpInput &in, const double J6x9_colmajor[54]) const;
     void publishOutputs(const double x_opt[9]);
     bool checkXoptValues(const double x_opt[9]) const;
 
@@ -114,7 +128,7 @@ private:
 
     // Config handlers
     void check_params();
-    void print_params(const struct10_T &cfg);
+    void print_params(const QpConfig &cfg);
     void shutdown_handler();
 
     // Debug mode
@@ -134,13 +148,10 @@ private:
     std::string emergency_stop_service_name_;
     double dt_;
 
-    // Native qp
-    bool use_native_qp_ = true;
     std::array<double,6> in_qmin_from_cfg_or_params_{};
     std::array<double,6> in_qmax_from_cfg_or_params_{};
 
     // C++ Jacobian path
-    bool use_jac_ros2_  = false;   // if true, use MobileManipulatorKinematics instead of MATLAB codegen
     bool jac_to_world_  = false;   // if true, jacobianWorld(); else jacobianBody()
     MobileManipulatorKinematics kin_;  // kinematics instance
     std::array<MobileManipulatorKinematics::DHParam, 6> dh_params_;
@@ -172,12 +183,7 @@ private:
     geometry_msgs::msg::PoseStamped base_pose_;
     geometry_msgs::msg::TransformStamped map_base_tf_;
 
-    // Column mapping (1-based)
-    std::vector<int> cols1based_;
-
-    // MATLAB persistent config
-    struct11_T qp_{}; // output of wbqp_init
-    bool qp_initialized_ = false;
+    bool qp_initialized_ = true;
 
     // ROS I/O
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_js_;

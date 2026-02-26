@@ -23,9 +23,6 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
 
-  <!-- Vendor with generated code -->
-  <depend>wbqp_codegen_vendor</depend>
-
   <export>
     <build_type>ament_cmake</build_type>
   </export>

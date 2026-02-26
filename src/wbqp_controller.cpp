@@ -34,12 +34,9 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     // --- Init C++ kinematics (wb_jac) if enabled ---
     initKinematics();
 
-    // Build cfg and run wbqp_init once
-    struct10_T cfg{};
+    // Build and print qp configuration
+    QpConfig cfg{};
     fillCfgStruct(cfg);
-    wbqp_init(&cfg, &qp_);
-    qp_initialized_ = true;
-
     print_params(cfg);
 
     // ROS I/O
@@ -128,13 +125,6 @@ void WbqpControllerNode::check_params()
   base_frame_      = this->get_parameter("frames.base").as_string();
   base_link_frame_ = this->get_parameter("frames.base_link").as_string();
 
-  // --- Solver column selection (1-based) ---
-  this->declare_parameter("qp.cols", std::vector<int64_t>{1,2,3,4,5,6,7,8,12});
-  auto cols_i64 = this->get_parameter("qp.cols").as_integer_array();
-  cols1based_.resize(cols_i64.size());
-  std::transform(cols_i64.begin(), cols_i64.end(), cols1based_.begin(),
-                 [](int64_t v){ return static_cast<int>(v); });
-
   // --- Robot fixed transform N->B ---
   this->declare_parameter("kinematics.P_N2B",     std::vector<double>{0.187, 0.0, 0.22});
   this->declare_parameter("kinematics.theta_N2B", std::vector<double>{0.0,   0.0,  0.0});
@@ -142,14 +132,8 @@ void WbqpControllerNode::check_params()
   auto th_n2b = this->get_parameter("kinematics.theta_N2B").as_double_array();
   for (int i=0;i<3;++i) { P_N2B_[i] = p_n2b[i]; theta_N2B_[i] = th_n2b[i]; }
 
-  // --- Qp solver type ---
-  this->declare_parameter<bool>("qp.use_native", true);
-  use_native_qp_ = this->get_parameter("qp.use_native").as_bool();
-
   // --- C++ Jacobian parameters ---
-  this->declare_parameter<bool>("jacobian.use_jac_ros2", false);
   this->declare_parameter<bool>("jacobian.jac_to_world", false);
-  use_jac_ros2_ = this->get_parameter("jacobian.use_jac_ros2").as_bool();
   jac_to_world_ = this->get_parameter("jacobian.jac_to_world").as_bool();
 
   // --- DH parameters (6 joints: a, d, alpha) ---
@@ -176,7 +160,7 @@ void WbqpControllerNode::check_params()
   RCLCPP_INFO(this->get_logger(), "Parameters loaded.");
 }
 
-void WbqpControllerNode::print_params(const struct10_T &cfg)
+void WbqpControllerNode::print_params(const QpConfig &cfg)
 {
     RCLCPP_INFO(this->get_logger(), "--- Loaded Parameters ---");
 
@@ -200,16 +184,6 @@ void WbqpControllerNode::print_params(const struct10_T &cfg)
                 P_N2B_[0], P_N2B_[1], P_N2B_[2]);
     RCLCPP_INFO(this->get_logger(), "theta_N2B = [%.3f, %.3f, %.3f]",
                 theta_N2B_[0], theta_N2B_[1], theta_N2B_[2]);
-
-    // --- Solver columns ---
-    std::ostringstream cols_ss;
-    cols_ss << "[";
-    for (size_t i=0; i<cols1based_.size(); ++i) {
-        cols_ss << cols1based_[i];
-        if (i+1 < cols1based_.size()) { cols_ss << ", "; }
-    }
-    cols_ss << "]";
-    RCLCPP_INFO(this->get_logger(), "QP cols = %s", cols_ss.str().c_str());
 
     // --- QP weights & limits ---
     RCLCPP_INFO(this->get_logger(), "QP Parameters:");
@@ -242,18 +216,16 @@ void WbqpControllerNode::print_params(const struct10_T &cfg)
 
     // --- Jacobian mode ---
     RCLCPP_INFO(this->get_logger(), "Jacobian:");
-    RCLCPP_INFO(this->get_logger(), "  use_jac_ros2 = %s", use_jac_ros2_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  use_jac_ros2 = true");
     RCLCPP_INFO(this->get_logger(), "  jac_to_world = %s", jac_to_world_ ? "true" : "false");
-    if (use_jac_ros2_) {
-        RCLCPP_INFO(this->get_logger(), "  DH parameters:");
-        for (int i = 0; i < 6; ++i) {
-            RCLCPP_INFO(this->get_logger(), "    joint%d: a=%.4f  d=%.4f  alpha=%.4f",
-                        i+1, dh_params_[i].a, dh_params_[i].d, dh_params_[i].alpha);
-        }
-        RCLCPP_INFO(this->get_logger(), "  TCP offset: [%.4f, %.4f, %.4f, %.4f, %.4f, %.4f]",
-                    tcp_offset_[0], tcp_offset_[1], tcp_offset_[2],
-                    tcp_offset_[3], tcp_offset_[4], tcp_offset_[5]);
+    RCLCPP_INFO(this->get_logger(), "  DH parameters:");
+    for (int i = 0; i < 6; ++i) {
+        RCLCPP_INFO(this->get_logger(), "    joint%d: a=%.4f  d=%.4f  alpha=%.4f",
+                    i+1, dh_params_[i].a, dh_params_[i].d, dh_params_[i].alpha);
     }
+    RCLCPP_INFO(this->get_logger(), "  TCP offset: [%.4f, %.4f, %.4f, %.4f, %.4f, %.4f]",
+                tcp_offset_[0], tcp_offset_[1], tcp_offset_[2],
+                tcp_offset_[3], tcp_offset_[4], tcp_offset_[5]);
 
     RCLCPP_INFO(this->get_logger(), "--------------------------");
 }
@@ -324,44 +296,13 @@ bool WbqpControllerNode::loopStep()
     }
 
     // --- Jacobian computation ---
-    struct1_T in{};
-
-    if (use_jac_ros2_)
-    {
-        // C++ Jacobian path (wb_jac)
-        double J6x9_colmajor[54];
-        computeJacobianRos2(J6x9_colmajor);
-
-        // Fill input struct directly with the 6x9 Jacobian
-        std::memset(&in, 0, sizeof(in));
-        for (int i = 0; i < 54; ++i) { in.J[i] = J6x9_colmajor[i]; }
-        for (int i = 0; i < 6; ++i) { in.q[i] = q_pos_[i]; }
-        for (int i = 0; i < 6; ++i) { in.u_star[i] = u_star_[i]; }
-        for (int i = 0; i < 9; ++i) { in.dotq_prev[i] = dotq_prev_[i]; }
-        in.dt = dt_;
-    }
-    else
-    {
-        // MATLAB codegen path
-        double in1[15];
-        buildIn15(in1);
-
-        double A6x12_colmajor[72];
-        WholeBodyJacobian(in1, A6x12_colmajor);
-
-        fillInputStruct(in, A6x12_colmajor);
-    }
+    QpInput in{};
+    double J6x9_colmajor[54];
+    computeJacobianRos2(J6x9_colmajor);
+    fillInputStruct(in, J6x9_colmajor);
 
     double x_opt[9];
-    if (use_native_qp_)
-    {
-        solve_qp_native(in, in.J, x_opt);
-    }
-    else
-    {
-        struct2_T dbg_out{};
-        wbqp_solve(reinterpret_cast<const struct0_T *>(&qp_), &in, x_opt, &dbg_out);
-    }
+    solve_qp_native(in, in.J, x_opt);
 
     bool xopt_ok = checkXoptValues(x_opt);
     if (!xopt_ok)
@@ -441,12 +382,9 @@ void WbqpControllerNode::onEmergencyStop(
 }
 
 // ------------------- MATLAB OPTIMIZER CONFIGURATION ------------------- //
-void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
+void WbqpControllerNode::fillCfgStruct(QpConfig &cfg)
 {
     std::memset(&cfg, 0, sizeof(cfg));
-
-    // cols
-    for (int i=0;i<9 && i<(int)cols1based_.size(); ++i) { cfg.cols[i] = static_cast<int>(cols1based_[i]); }
 
     // --- QP weights & limits (scalars) ---
     this->declare_parameter("qp.beta_arm",   0.001);
@@ -493,14 +431,11 @@ void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
     }
 }
 
-void WbqpControllerNode::fillInputStruct(struct1_T &in, const double J6x12_colmajor[72]) const
+void WbqpControllerNode::fillInputStruct(QpInput &in, const double J6x9_colmajor[54]) const
 {
     std::memset(&in, 0, sizeof(in));
 
-    // Provide reduced J (6x9) if your generated struct expects field 'J'
-    double J6x9[54];
-    reduce_J_6x12_to_6x9(J6x12_colmajor, cols1based_, J6x9);
-    for (int i=0;i<54;++i) { in.J[i] = J6x9[i]; }
+    for (int i=0;i<54;++i) { in.J[i] = J6x9_colmajor[i]; }
 
     for (int i=0;i<6;++i) { in.q[i] = q_pos_[i]; }
     for (int i=0;i<6;++i) { in.u_star[i] = u_star_[i]; }
@@ -508,31 +443,9 @@ void WbqpControllerNode::fillInputStruct(struct1_T &in, const double J6x12_colma
     in.dt = dt_;
 }
 
-void WbqpControllerNode::buildIn15(double out_in1_15[15]) const
-{
-    out_in1_15[0]=P_N2B_[0]; out_in1_15[1]=P_N2B_[1]; out_in1_15[2]=P_N2B_[2];
-    for (int i=0;i<6;++i){ out_in1_15[3+i] = q_pos_[i]; }
-    out_in1_15[9]=theta_N2B_[0]; out_in1_15[10]=theta_N2B_[1]; out_in1_15[11]=theta_N2B_[2];
-    out_in1_15[12]=theta_W2N_[0]; out_in1_15[13]=theta_W2N_[1]; out_in1_15[14]=theta_W2N_[2];
-}
-
-void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
-                                              const std::vector<int>& cols1based,
-                                              double J6x9_colmajor[54])
-{
-    for (int j=0;j<9;++j) {
-        int src_c = cols1based[j] - 1;
-        for (int r=0;r<6;++r) {
-            J6x9_colmajor[r + 6*j] = J6x12_colmajor[r + 6*src_c];
-        }
-    }
-}
-
 // ------------------- C++ JACOBIAN (wb_jac) ------------------- //
 void WbqpControllerNode::initKinematics()
 {
-    if (!use_jac_ros2_) return;
-
     // Set DH params from config
     kin_.setDH(dh_params_);
 
@@ -583,7 +496,7 @@ void WbqpControllerNode::computeJacobianRos2(double J6x9_colmajor[54]) const
 }
 
 // ------------------- NATIVE OPTIMIZER CONFIGURATION ------------------- //
-void WbqpControllerNode::solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9])
+void WbqpControllerNode::solve_qp_native(const QpInput &in, const double J6x9_colmajor[54], double x_opt[9])
 {
     wbqp::NativeQpInput nin;
     // copy J

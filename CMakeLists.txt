@@ -21,7 +21,6 @@ find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
-find_package(wbqp_codegen_vendor REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OsqpEigen REQUIRED)
 
@@ -36,7 +35,7 @@ add_executable(wbqp_controller
 )
 
 ament_target_dependencies(wbqp_controller
-  rclcpp sensor_msgs geometry_msgs std_msgs std_srvs tf2_ros wbqp_codegen_vendor
+  rclcpp sensor_msgs geometry_msgs std_msgs std_srvs tf2_ros
 )
 
 # Add the new source file
@@ -65,14 +64,7 @@ target_include_directories(tcp_pose_converter PUBLIC
   ${EIGEN3_INCLUDE_DIR}
 )
 
-# Pull include dirs from the vendor
-target_include_directories(wbqp_controller PRIVATE
-  ${wbqp_codegen_vendor_INCLUDE_DIRS}
-)
-
-# Link with full paths exported by the vendor
 target_link_libraries(wbqp_controller
-  ${wbqp_codegen_vendor_LIBRARIES}
   Eigen3::Eigen
   OsqpEigen::OsqpEigen
 )

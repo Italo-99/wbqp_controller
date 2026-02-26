@@ -1,19 +1,17 @@
 # Whole-Body Controller with QP Solver
 
-ROS 2 node wrapping MATLAB-exported Whole-Body QP (from the vendor package `wbqp_codegen_vendor`).
+ROS 2 node running a native Whole-Body QP solver (`qp_solver_native`).
 It computes optimal joint/base velocity commands from a Jacobian and desired end-effector twist, then publishes commands and TFs for integration into your robot system.
 
 ---
 
 ## 1. Dependencies
 
-* `wbqp_codegen_vendor` (provides static libs: `wbqp_init`, `wbqp_solve`, `whole_body_jacobian`, plus headers under `include/<libname>`)
 * `rclcpp`, `sensor_msgs`, `geometry_msgs`, `std_msgs`, `tf2_ros`, `std_srvs`
 
 Build order:
 
 ```bash
-colcon build --packages-select wbqp_codegen_vendor
 colcon build --packages-select wbqp_controller
 ```
 
@@ -49,7 +47,6 @@ All configuration is handled in YAML:
 Includes:
 
 * QP weights and limits
-* Jacobian column mapping
 * Control timestep `dt`
 * Frame names
 * Topic names
