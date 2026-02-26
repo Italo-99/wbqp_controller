@@ -67,7 +67,8 @@ namespace wbqp
         static void buildReg(Eigen::Matrix<double,9,9>& H);
 
         static void buildVarBounds(const NativeQpInput& in,
-                                Eigen::VectorXd &lb, Eigen::VectorXd &ub);
+                                Eigen::Matrix<double,9,1> &lb,
+                                Eigen::Matrix<double,9,1> &ub);
 
         static void buildAccelConstraints(const NativeQpInput& in,
                                         Eigen::SparseMatrix<double>& A,
@@ -83,8 +84,8 @@ namespace wbqp
 
         static void solveFallback(const Eigen::Matrix<double,9,9>& H,
                                 const Eigen::Matrix<double,9,1>& f,
-                                const Eigen::VectorXd& lb,
-                                const Eigen::VectorXd& ub,
+                                const Eigen::Matrix<double,9,1>& lb,
+                                const Eigen::Matrix<double,9,1>& ub,
                                 NativeQpOutput &out);
     };
 }

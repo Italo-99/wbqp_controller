@@ -95,6 +95,12 @@ public:
     void spinner();
 
 private:
+    enum class SingularityMethod
+    {
+        DET,
+        YOSHIKAWA
+    };
+
     // Callbacks
     void jointStateCb(const sensor_msgs::msg::JointState::SharedPtr msg);
     void twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr msg);
@@ -116,6 +122,9 @@ private:
 
     void fillCfgStruct(QpConfig &cfg);
     void fillInputStruct(QpInput &in, const double J6x9_colmajor[54]) const;
+    void enforceSingularityConstraint(double x_opt[9]);
+    double computeSingularityMetricForQ(const std::array<double,6>& q_rad) const;
+    double computeSingularityMetricFromArmJacobian(const Eigen::Matrix<double,6,6>& J_arm) const;
     void publishOutputs(const double x_opt[9]);
     bool checkXoptValues(const double x_opt[9]) const;
 
@@ -150,6 +159,10 @@ private:
 
     std::array<double,6> in_qmin_from_cfg_or_params_{};
     std::array<double,6> in_qmax_from_cfg_or_params_{};
+    bool singularity_enable_ = false;
+    double singularity_min_threshold_ = 1e-4;
+    SingularityMethod singularity_method_ = SingularityMethod::YOSHIKAWA;
+    std::string singularity_method_name_ = "yoshikawa";
 
     // C++ Jacobian path
     bool jac_to_world_  = false;   // if true, jacobianWorld(); else jacobianBody()

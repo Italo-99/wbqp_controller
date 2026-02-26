@@ -1,10 +1,62 @@
 
 #include "wbqp_controller/qp_solver_native.hpp"
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace wbqp
 {
+    namespace
+    {
+        const Eigen::Matrix<double,6,6>& taskWeightMatrix()
+        {
+            static const Eigen::Matrix<double,6,6> Wt = [] {
+                Eigen::Matrix<double,6,6> m = Eigen::Matrix<double,6,6>::Zero();
+                for (int i = 0; i < 3; ++i) { m(i,i) = NativeQpConfig::W_lin; }
+                for (int i = 3; i < 6; ++i) { m(i,i) = NativeQpConfig::W_ang; }
+                return m;
+            }();
+            return Wt;
+        }
+
+        const Eigen::Matrix<double,9,9>& regularizationContribution()
+        {
+            static const Eigen::Matrix<double,9,9> Hreg = [] {
+                Eigen::Matrix<double,9,9> R = Eigen::Matrix<double,9,9>::Zero();
+                for (int i = 0; i < 6; ++i) { R(i,i) = NativeQpConfig::beta_arm; }
+                R(6,6) = NativeQpConfig::alpha_xy;
+                R(7,7) = NativeQpConfig::alpha_xy;
+                R(8,8) = NativeQpConfig::alpha_yaw;
+                return 2.0 * (R + NativeQpConfig::nu * Eigen::Matrix<double,9,9>::Identity());
+            }();
+            return Hreg;
+        }
+
+        const Eigen::Matrix<double,9,1>& baseLowerBounds()
+        {
+            static const Eigen::Matrix<double,9,1> lb = [] {
+                Eigen::Matrix<double,9,1> v;
+                v << -NativeQpConfig::max_dotq, -NativeQpConfig::max_dotq, -NativeQpConfig::max_dotq,
+                     -NativeQpConfig::max_dotq, -NativeQpConfig::max_dotq, -NativeQpConfig::max_dotq,
+                     -NativeQpConfig::max_V, -NativeQpConfig::max_V, -NativeQpConfig::max_Omegaz;
+                return v;
+            }();
+            return lb;
+        }
+
+        const Eigen::Matrix<double,9,1>& baseUpperBounds()
+        {
+            static const Eigen::Matrix<double,9,1> ub = [] {
+                Eigen::Matrix<double,9,1> v;
+                v << NativeQpConfig::max_dotq, NativeQpConfig::max_dotq, NativeQpConfig::max_dotq,
+                     NativeQpConfig::max_dotq, NativeQpConfig::max_dotq, NativeQpConfig::max_dotq,
+                     NativeQpConfig::max_V, NativeQpConfig::max_V, NativeQpConfig::max_Omegaz;
+                return v;
+            }();
+            return ub;
+        }
+    } // namespace
+
     Eigen::Matrix<double,6,9> NativeQpSolver::mapJ(const std::array<double,54>& Jc)
     {
         Eigen::Matrix<double,6,9> J;
@@ -12,50 +64,39 @@ namespace wbqp
         return J;
     }
 
-    void NativeQpSolver::buildTask(const Eigen::Matrix<double,6,9>& J,  // TODO: set Wt as init
+    void NativeQpSolver::buildTask(const Eigen::Matrix<double,6,9>& J,
                                    const Eigen::Matrix<double,6,1>& u,
                                    const Eigen::Matrix<double,9,1>& dqprev,
                                    Eigen::Matrix<double,9,9>& H,
                                    Eigen::Matrix<double,9,1>& f)
     {
-        // Wt is diagonal
-        Eigen::Matrix<double,6,6> Wt = Eigen::Matrix<double,6,6>::Zero();
-        for (int i=0;i<3;++i) Wt(i,i) = NativeQpConfig::W_lin;
-        for (int i=3;i<6;++i) Wt(i,i) = NativeQpConfig::W_ang;
+        const Eigen::Matrix<double,6,6>& Wt = taskWeightMatrix();
 
         // 0.5 z^T H z + f^T z with 2x scaling to match LS normal equations convention
         H = 2.0 * (J.transpose() * Wt * J);
         f = -2.0 * (J.transpose() * Wt * u + NativeQpConfig::nu * dqprev);
     }
 
-    void NativeQpSolver::buildReg(Eigen::Matrix<double,9,9>& H) // TODO: set R as init
+    void NativeQpSolver::buildReg(Eigen::Matrix<double,9,9>& H)
     {
-        // Block-diag regularization + nu*I
-        Eigen::Matrix<double,9,9> R = Eigen::Matrix<double,9,9>::Zero();
-        for (int i=0;i<6;++i) R(i,i) = NativeQpConfig::beta_arm;
-        R(6,6) = NativeQpConfig::alpha_xy;
-        R(7,7) = NativeQpConfig::alpha_xy;
-        R(8,8) = NativeQpConfig::alpha_yaw;
-        H += 2.0 * (R + NativeQpConfig::nu * Eigen::Matrix<double,9,9>::Identity());
+        H += regularizationContribution();
     }
 
     void NativeQpSolver::buildVarBounds(const NativeQpInput& in,
-                                        Eigen::VectorXd &lb, Eigen::VectorXd &ub)  // TODO: set lb,ub as init
+                                        Eigen::Matrix<double,9,1> &lb,
+                                        Eigen::Matrix<double,9,1> &ub)
     {
-        lb.resize(9); ub.resize(9);
+        lb = baseLowerBounds();
+        ub = baseUpperBounds();
 
         // Joints: velocity box AND position window this step: q + dq*dt ∈ [qmin,qmax]
         for (int i=0;i<6;++i) {
             const double lb_pos = (in.qmin[i] - in.q[i]) / in.dt;
             const double ub_pos = (in.qmax[i] - in.q[i]) / in.dt;
-            const double lb_i = std::max(-NativeQpConfig::max_dotq, lb_pos);
-            const double ub_i = std::min( NativeQpConfig::max_dotq, ub_pos);
+            const double lb_i = std::max(baseLowerBounds()[i], lb_pos);
+            const double ub_i = std::min(baseUpperBounds()[i], ub_pos);
             lb[i] = lb_i; ub[i] = ub_i;
         }
-        // Base (per-axis box; circle would need SOC)
-        lb[6] = -NativeQpConfig::max_V;      ub[6] =  NativeQpConfig::max_V; // Vx
-        lb[7] = -NativeQpConfig::max_V;      ub[7] =  NativeQpConfig::max_V; // Vy
-        lb[8] = -NativeQpConfig::max_Omegaz; ub[8] =  NativeQpConfig::max_Omegaz; // w_z
     }
 
     void NativeQpSolver::buildAccelConstraints(const NativeQpInput& in,
@@ -144,8 +185,8 @@ namespace wbqp
 
     void NativeQpSolver::solveFallback(const Eigen::Matrix<double,9,9>& H,
                                     const Eigen::Matrix<double,9,1>& f,
-                                    const Eigen::VectorXd& lb,
-                                    const Eigen::VectorXd& ub,
+                                    const Eigen::Matrix<double,9,1>& lb,
+                                    const Eigen::Matrix<double,9,1>& ub,
                                     NativeQpOutput &out)
     {
         Eigen::Matrix<double,9,1> z = H.ldlt().solve(-f);
@@ -169,7 +210,7 @@ namespace wbqp
         buildReg(H);
 
         // Bounds and linear constraints
-        Eigen::VectorXd lb, ub; buildVarBounds(in, lb, ub);
+        Eigen::Matrix<double,9,1> lb, ub; buildVarBounds(in, lb, ub);
 
         Eigen::SparseMatrix<double> Aacc; Eigen::VectorXd lA, uA;
         buildAccelConstraints(in, Aacc, lA, uA);

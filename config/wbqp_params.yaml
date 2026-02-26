@@ -55,6 +55,11 @@
     jacobian:
       jac_to_world: false                         # true => world-frame Jacobian; false => body-frame Jacobian
 
+    singularity:
+      enable: false                               # true => limit arm command to keep singularity metric above threshold
+      min_threshold: 1.0e-4                       # minimum admissible singularity metric
+      method: "yoshikawa"                         # "det" or "yoshikawa"
+
     kinematics:
       P_N2B:     [0.187, 0.0, 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z)
       theta_N2B: [0.0,   0.0, 0.00]               # orientation of manipulator base link in the mobile base frame (r,p,y)

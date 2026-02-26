@@ -24,6 +24,9 @@
 
 #include "wbqp_controller/wbqp_controller.hpp"
 
+#include <algorithm>
+#include <cctype>
+
 // ------------------- CONSTRUCTOR & DESTRUCTOR ------------------- //
 WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("wbqp_controller", options)
@@ -136,6 +139,45 @@ void WbqpControllerNode::check_params()
   this->declare_parameter<bool>("jacobian.jac_to_world", false);
   jac_to_world_ = this->get_parameter("jacobian.jac_to_world").as_bool();
 
+  // --- Singularity handling ---
+  this->declare_parameter<bool>("singularity.enable", false);
+  this->declare_parameter<double>("singularity.min_threshold", 1.0e-4);
+  this->declare_parameter<std::string>("singularity.method", "yoshikawa");
+  singularity_enable_ = this->get_parameter("singularity.enable").as_bool();
+  singularity_min_threshold_ = this->get_parameter("singularity.min_threshold").as_double();
+
+  if (singularity_min_threshold_ < 0.0)
+  {
+    RCLCPP_WARN(this->get_logger(),
+                "singularity.min_threshold is negative (%.3e). Clamping to 0.0.",
+                singularity_min_threshold_);
+    singularity_min_threshold_ = 0.0;
+  }
+
+  singularity_method_name_ = this->get_parameter("singularity.method").as_string();
+  std::transform(
+      singularity_method_name_.begin(),
+      singularity_method_name_.end(),
+      singularity_method_name_.begin(),
+      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+  if (singularity_method_name_ == "det")
+  {
+    singularity_method_ = SingularityMethod::DET;
+  }
+  else if (singularity_method_name_ == "yoshikawa")
+  {
+    singularity_method_ = SingularityMethod::YOSHIKAWA;
+  }
+  else
+  {
+    RCLCPP_WARN(this->get_logger(),
+                "Unknown singularity.method '%s'. Falling back to 'yoshikawa'.",
+                singularity_method_name_.c_str());
+    singularity_method_ = SingularityMethod::YOSHIKAWA;
+    singularity_method_name_ = "yoshikawa";
+  }
+
   // --- DH parameters (6 joints: a, d, alpha) ---
   const std::array<std::string, 6> joint_names = {"joint1","joint2","joint3","joint4","joint5","joint6"};
   // UR5e defaults
@@ -226,6 +268,10 @@ void WbqpControllerNode::print_params(const QpConfig &cfg)
     RCLCPP_INFO(this->get_logger(), "  TCP offset: [%.4f, %.4f, %.4f, %.4f, %.4f, %.4f]",
                 tcp_offset_[0], tcp_offset_[1], tcp_offset_[2],
                 tcp_offset_[3], tcp_offset_[4], tcp_offset_[5]);
+    RCLCPP_INFO(this->get_logger(), "Singularity:");
+    RCLCPP_INFO(this->get_logger(), "  enable        = %s", singularity_enable_ ? "true" : "false");
+    RCLCPP_INFO(this->get_logger(), "  min_threshold = %.6e", singularity_min_threshold_);
+    RCLCPP_INFO(this->get_logger(), "  method        = %s", singularity_method_name_.c_str());
 
     RCLCPP_INFO(this->get_logger(), "--------------------------");
 }
@@ -309,6 +355,11 @@ bool WbqpControllerNode::loopStep()
     {
         RCLCPP_ERROR(this->get_logger(), "QP solver returned invalid values (inf or nan). Skipping this cycle.");
         for (int i=0;i<9;++i) { x_opt[i] = dotq_prev_[i]; }
+    }
+
+    if (singularity_enable_)
+    {
+        enforceSingularityConstraint(x_opt);
     }
 
     if (emergency_stop_active_.load()) {
@@ -493,6 +544,121 @@ void WbqpControllerNode::computeJacobianRos2(double J6x9_colmajor[54]) const
     // Store in column-major order (Eigen default is ColMajor)
     Eigen::Map<Eigen::Matrix<double, 6, 9, Eigen::ColMajor>> J_out(J6x9_colmajor);
     J_out = J;
+}
+
+double WbqpControllerNode::computeSingularityMetricFromArmJacobian(
+    const Eigen::Matrix<double,6,6>& J_arm) const
+{
+    if (singularity_method_ == SingularityMethod::DET)
+    {
+        return std::abs(J_arm.determinant());
+    }
+
+    const Eigen::Matrix<double,6,6> JJt = J_arm * J_arm.transpose();
+    const double det_jjt = JJt.determinant();
+    return std::sqrt(std::max(0.0, det_jjt));
+}
+
+double WbqpControllerNode::computeSingularityMetricForQ(const std::array<double,6>& q_rad) const
+{
+    Eigen::Matrix<double,6,1> q;
+    for (int i = 0; i < 6; ++i) { q(i) = q_rad[i]; }
+
+    Eigen::Matrix<double,6,9> J;
+    if (jac_to_world_)
+    {
+        MobileManipulatorKinematics::BasePose2D basePose;
+        basePose.px = x_base_;
+        basePose.py = y_base_;
+        basePose.yaw = theta_W2N_[2];
+        J = kin_.jacobianWorld(q, basePose);
+    }
+    else
+    {
+        J = kin_.jacobianBody(q);
+    }
+
+    const Eigen::Matrix<double,6,6> J_arm = J.block<6,6>(0,0);
+    return computeSingularityMetricFromArmJacobian(J_arm);
+}
+
+void WbqpControllerNode::enforceSingularityConstraint(double x_opt[9])
+{
+    const double threshold = singularity_min_threshold_;
+
+    std::array<double,6> q_current{};
+    for (int i = 0; i < 6; ++i) { q_current[i] = q_pos_[i]; }
+
+    const double sigma_current = computeSingularityMetricForQ(q_current);
+    if (sigma_current + 1.0e-12 < threshold)
+    {
+        for (int i = 0; i < 6; ++i) { x_opt[i] = 0.0; }
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "Singularity metric %.6e is below threshold %.6e. Arm motion is frozen.",
+            sigma_current,
+            threshold);
+        return;
+    }
+
+    auto sigma_at_scale = [&](double scale) {
+        std::array<double,6> q_trial{};
+        for (int i = 0; i < 6; ++i)
+        {
+            q_trial[i] = q_current[i] + (scale * x_opt[i] * dt_);
+        }
+        return computeSingularityMetricForQ(q_trial);
+    };
+
+    const double sigma_full_step = sigma_at_scale(1.0);
+    if (sigma_full_step + 1.0e-12 >= threshold)
+    {
+        return;
+    }
+
+    double lo = 0.0;
+    double hi = 1.0;
+    for (int iter = 0; iter < 24; ++iter)
+    {
+        const double mid = 0.5 * (lo + hi);
+        const double sigma_mid = sigma_at_scale(mid);
+        if (sigma_mid + 1.0e-12 >= threshold)
+        {
+            lo = mid;
+        }
+        else
+        {
+            hi = mid;
+        }
+    }
+
+    for (int i = 0; i < 6; ++i) { x_opt[i] *= lo; }
+
+    const double sigma_limited = sigma_at_scale(lo);
+    if (sigma_limited + 1.0e-12 < threshold)
+    {
+        for (int i = 0; i < 6; ++i) { x_opt[i] = 0.0; }
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "Unable to satisfy singularity threshold %.6e with commanded step. Arm motion is frozen.",
+            threshold);
+        return;
+    }
+
+    if (lo < 0.999)
+    {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(),
+            *this->get_clock(),
+            2000,
+            "Arm velocity scaled by %.3f to keep singularity metric above %.6e.",
+            lo,
+            threshold);
+    }
 }
 
 // ------------------- NATIVE OPTIMIZER CONFIGURATION ------------------- //
