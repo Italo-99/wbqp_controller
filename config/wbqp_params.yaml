@@ -20,14 +20,21 @@
       q_speed:     "/manipulator/js_cmd_vel"      # joint speed command topic for the manipulator (output)
       arm_vel:     "/manipulator/cmd_vel"         # arm twist sensing topic (input), default kept as cmd_vel
       arm_vel_cmd: "/manipulator/cmd_vel"         # arm twist command topic computed from joint speeds (output)
+      obstacle_points: "/mobile_manipulator/obstacle_points" # PoseArray of obstacle points for collision layers (expected in map/world frame)
       emergency_state: "/mobile_platform/emergency_stop_active" # published emergency latch state (true/false)
     services:
       emergency_stop: "/mobile_platform/emergency_stop"  # true => publish zero commands, false => normal execution
 
+    # RATE SETTINGS
     control:
       dt: 0.002                                   # control period
 
+    # METHOD SELECTION
+    tp_method: false                              # false => QP formulation (OptimizationFormulation.pdf), true => task-priority formulation (Theory_1platform.pdf)
+
     qp:
+      use_native: true                            # use native qp solver (true) or matlab generated (false, this never works)
+      cols: [1,2,3,4,5,6,7,8,12]                  # columns of jacobian (ignore vz, wx, wy for a planar mobile base)
       beta_arm: 0.001                             # weight for the manipulator joints (regularization penalty, penalized less)  
       alpha_xy: 0.002                             # weight for the base translation (penalized more)
       alpha_yaw: 0.002                            # weight for the base rotation (penalized more)
@@ -37,7 +44,33 @@
       max_dotq: 1.0                               # maximum joint speed (rad/s)
       max_V: 0.2                                  # maximum linear velocity of the mobile base (m/s)
       max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
+      
+      # QP-only singularity handling
+      singularity:
+        enable: false                             # true => limit arm command to keep singularity metric above threshold
+        min_threshold: 1.0e-4                     # minimum admissible singularity metric
+        method: "yoshikawa"                       # "det" or "yoshikawa"
 
+      # QP-only collision hard constraints
+      collision:
+        enable: false                             # add hard inequalities d(i,j) >= d_safe for each robot/obstacle point pair
+        use_closest_obstacle: true                # true => for each robot point consider only nearest obstacle point; false => use all robot-obstacle pairs
+        d_safe: 0.15                              # hard minimum point-to-point distance [m]
+        max_constraints: 0                        # max active rows (0 => keep all generated constraints)
+        base:
+          size_x: 0.70                            # mobile base footprint size along x [m]
+          size_y: 0.50                            # mobile base footprint size along y [m]
+          delta_h: 0.05                           # place base corners this much below arm base-link z level [m]
+        include_joint_endpoints: true             # include endpoints O1..O6 (end of each link/joint stage)
+        include_tcp: true                         # include TCP point ONLY if tcp_offset translation is non-zero
+        samples_per_link: 0                       # extra interior points per link segment (0 => only segment endpoints)
+
+      # QP-only TCP z hard guard in arm-base frame B
+      tcp_z_guard:
+        enable: false                             # add hard inequality z_tcp_B >= z_min
+        z_min: 0.03                               # minimum TCP height [m] in arm-base frame B
+
+    # CONSTRAINTS
     limits:
 
       # Joint limits boundaries [deg] for the joint1 - left configuration
@@ -52,13 +85,64 @@
       a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)
       alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
 
+    # JACOBIAN SETUP FOR QP METHOD
     jacobian:
-      jac_to_world: false                         # true => world-frame Jacobian; false => body-frame Jacobian
+      use_jac_ros2: false                         # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian
+      jac_to_world: false                         # true => world-frame Jacobian; false => body-frame Jacobian; only relevant if use_jac_ros2 is true (no MATLAB codegen)
 
-    singularity:
-      enable: false                               # true => limit arm command to keep singularity metric above threshold
-      min_threshold: 1.0e-4                       # minimum admissible singularity metric
-      method: "yoshikawa"                         # "det" or "yoshikawa"
+    # TP-specific tuning (used when tp_method=true). If omitted, sensible defaults are used.
+    tp:
+      solver:
+        lambda: 1.0e-4                            # damping in the damped pseudoinverse; larger => more robust, less reactive
+        pinv_method: "svd"                        # "svd" (more robust near singularities) or "ldlt" (faster normal-equation solve)
+
+      priorities:
+        tracking: 1                               # lower number = higher priority
+        joint_limits: 2                           # lower number = higher priority
+        tcp_z: 3                                  # lower number = higher priority (TCP height guard in arm-base frame B)
+        singularity: 4                            # lower number = higher priority
+        collision: 5                              # lower number = higher priority
+
+      tracking:
+        kp: [2, 2, 2, 2, 2, 2]                    # pose-mode proportional gains [x y z roll pitch yaw]
+        ki: [0, 0, 0, 0, 0, 0]                    # pose-mode integral gains [x y z roll pitch yaw]
+        v_limit: [1, 1, 1, 1, 1, 1]               # task-space speed clamp [m/s, m/s, m/s, rad/s, rad/s, rad/s]; applied in TP tracking task
+
+      joint_limits:
+        k: 2.0                                    # repulsive action gain near limits (how strongly joints are pushed back)
+        d_act: 0.2                                # activation distance from the protected bound [rad]
+        margin: 0.05                              # protected inner safety margin from qmin/qmax [rad]
+
+      singularity:
+        enable: false                             # enable TP singularity task
+        method: "yoshikawa"                       # "yoshikawa" => sqrt(det(JJ^T)), "det" => |det(J)| on arm Jacobian
+        mu_min: 1.0e-4                            # fully active below this manipulability value
+        mu_max: 1.25e-4                           # deactivated above this value (smooth transition between mu_min and mu_max)
+        mu_safe: 1.5e-4                           # target manipulability the task tries to recover toward
+        k: 1.0                                    # gain for manipulability recovery speed
+        fd_eps: 1.0e-4                            # finite-difference joint perturbation [rad] for gradient estimation
+
+      collision:
+        enable: false                             # enable TP collision task
+        use_closest_obstacle: true                # true => one nearest obstacle per robot point; false => all robot-obstacle pairs (still capped by max_constraints)
+        d_safe: 0.15                              # desired minimum robot-obstacle distance [m]
+        d_act: 0.30                               # activation distance [m]; constraints activate when distance < d_act
+        k: 3.0                                    # repulsive speed gain for distance recovery
+        max_constraints: 64                       # max active point-pair constraints per cycle
+        base:
+          size_x: 0.70                            # mobile base footprint size along x [m]
+          size_y: 0.50                            # mobile base footprint size along y [m]
+          delta_h: 0.05                           # place base corners this much below arm base-link z level [m]
+        include_joint_endpoints: true             # include endpoints O1..O6 (end of each link/joint stage)
+        include_tcp: true                         # include TCP point ONLY if tcp_offset translation is non-zero
+        samples_per_link: 0                       # extra interior points per link segment (0 => only segment endpoints)
+        robot_points: [0, 1]                      # legacy key, ignored now (point set is auto-generated from fields above)
+
+      tcp_z_guard:
+        enable: false                             # enable TP TCP z guard task
+        z_min: 0.03                               # minimum TCP height [m] in arm-base frame B
+        z_act: 0.06                               # activation height [m]; no TP action above this value
+        k: 2.0                                    # recovery gain when below z_act
 
     kinematics:
       P_N2B:     [0.187, 0.0, 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z)
@@ -77,6 +161,6 @@
       tcp_offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
     frames:
-      map:       "map"                            # fixed world frame 
-      base:      "mobile_base"                    # mobile base frame
+      map:       "map"                             # fixed world frame 
+      base:      "mobile_base"                     # mobile base frame
       base_link: "base_link"                       # manipulator base link frame (world_ur for sim, base_link for real robot)

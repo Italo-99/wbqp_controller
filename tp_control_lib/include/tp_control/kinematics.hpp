@@ -18,7 +18,7 @@ public:
   virtual ~IKinematicsProvider() = default;
 
   // Called once per cycle.
-  virtual void update(const Vec& q) = 0;
+  virtual void update(const Vec& q) const = 0;
 
   // EE pose and Jacobian for the full generalized coordinates (base+arm).
   virtual Pose6D eePose() const = 0;

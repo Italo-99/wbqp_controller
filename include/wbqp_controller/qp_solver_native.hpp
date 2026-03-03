@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <vector>
 #include <Eigen/Core>
 #include <Eigen/Sparse>
 
@@ -43,6 +44,13 @@ namespace wbqp
         double                dt{0.002};
         std::array<double,6>  qmin{ {-0.0000, -2.0944, -2.3562, -2.3562, -0.0000, -3.1416} };
         std::array<double,6>  qmax{ {+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +3.1416} };
+
+        // Optional extra linear hard constraints:
+        // For each row k: extra_l[k] <= extra_A[k] * z <= extra_u[k]
+        // where z = [dq1..dq6, Vx, Vy, Omegaz].
+        std::vector<std::array<double,9>> extra_A_rows{};
+        std::vector<double> extra_l{};
+        std::vector<double> extra_u{};
     };
 
     // Output z* = [dq1..dq6, Vx, Vy, Omegaz]

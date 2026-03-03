@@ -3,6 +3,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <algorithm>
+#include <cctype>
 
 namespace tp_control {
 
@@ -32,10 +33,33 @@ double SingularityTask::manipulabilityYoshikawa(const Mat& J) {
   return prod; // sqrt(det(M)) = prod(diag(L))
 }
 
+double SingularityTask::manipulabilityDet(const Mat& J) {
+  if (J.rows() != J.cols()) {
+    return 0.0;
+  }
+  return std::abs(J.determinant());
+}
+
+double SingularityTask::manipulability(const Mat& J) const {
+  if (method_ == Method::DET) {
+    return manipulabilityDet(J);
+  }
+  return manipulabilityYoshikawa(J);
+}
+
 void SingularityTask::configure(int n_dof) {
   n_ = n_dof;
   grad_full_.resize(n_);
   grad_full_.setZero();
+
+  std::string method = p_.method;
+  std::transform(method.begin(), method.end(), method.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (method == "det") {
+    method_ = Method::DET;
+  } else {
+    method_ = Method::YOSHIKAWA;
+  }
 
   // Will resize after we know arm dofs at runtime, but expected stable.
 }
@@ -57,7 +81,7 @@ void SingularityTask::update(const Context& cx, Eigen::Ref<Mat> J_out, Eigen::Re
   Jarm_.resize(6, n_arm_);
   cx.kin.armJacobian(Jarm_);
 
-  const double mu = manipulabilityYoshikawa(Jarm_);
+  const double mu = manipulability(Jarm_);
 
   // Activation based on mu: 1 when mu <= mu_min, 0 when mu >= mu_max
   double alpha = 0.0;
@@ -97,7 +121,7 @@ void SingularityTask::update(const Context& cx, Eigen::Ref<Mat> J_out, Eigen::Re
     cx.kin.update(q_plus);
     Mat Jarm_p(6, n_arm_);
     cx.kin.armJacobian(Jarm_p);
-    const double mu_p = manipulabilityYoshikawa(Jarm_p);
+    const double mu_p = manipulability(Jarm_p);
 
     grad_arm_(i) = (mu_p - mu) / std::max(1e-12, p_.fd_eps);
   }

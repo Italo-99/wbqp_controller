@@ -21,6 +21,7 @@ find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(wbqp_codegen_vendor REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(OsqpEigen REQUIRED)
 
@@ -35,13 +36,19 @@ add_executable(wbqp_controller
 )
 
 ament_target_dependencies(wbqp_controller
-  rclcpp sensor_msgs geometry_msgs std_msgs std_srvs tf2_ros
+  rclcpp sensor_msgs geometry_msgs std_msgs std_srvs tf2_ros wbqp_codegen_vendor
 )
 
 # Add the new source file
 target_sources(wbqp_controller
   PRIVATE
   src/qp_solver_native.cpp
+  tp_control_lib/src/StackOfTasksSolver.cpp
+  tp_control_lib/src/TaskPriorityController.cpp
+  tp_control_lib/src/tasks/JointLimitTask.cpp
+  tp_control_lib/src/tasks/SingularityTask.cpp
+  tp_control_lib/src/tasks/TrackingTask.cpp
+  tp_control_lib/src/tasks/PointCloudCollisionTask.cpp
 )
 
 # --- Menu node target ---
@@ -64,7 +71,13 @@ target_include_directories(tcp_pose_converter PUBLIC
   ${EIGEN3_INCLUDE_DIR}
 )
 
+target_include_directories(wbqp_controller PRIVATE
+  ${wbqp_codegen_vendor_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_SOURCE_DIR}/tp_control_lib/include
+)
+
 target_link_libraries(wbqp_controller
+  ${wbqp_codegen_vendor_LIBRARIES}
   Eigen3::Eigen
   OsqpEigen::OsqpEigen
 )

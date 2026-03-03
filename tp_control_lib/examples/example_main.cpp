@@ -12,7 +12,7 @@ class DummyKin final : public tp_control::IKinematicsProvider {
 public:
   explicit DummyKin(int n, int n_arm) : n_(n), n_arm_(n_arm) {}
 
-  void update(const tp_control::Vec& q) override { q_ = q; }
+  void update(const tp_control::Vec& q) const override { q_ = q; }
 
   tp_control::Pose6D eePose() const override {
     tp_control::Pose6D p;
@@ -52,7 +52,7 @@ public:
 private:
   int n_ = 0;
   int n_arm_ = 0;
-  tp_control::Vec q_;
+  mutable tp_control::Vec q_;
 };
 
 int main() {

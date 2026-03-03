@@ -1,7 +1,6 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
-from launch.actions import OpaqueFunction
-from launch.conditions import IfCondition, UnlessCondition
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -22,10 +21,16 @@ def generate_launch_description():
         "gui_arm", default_value="true",
         description="If true, launch arm_gui."
     )
+    wbqp_params_arg = DeclareLaunchArgument(
+        "wbqp_params_file",
+        default_value=os.path.join(get_package_share_directory("wbqp_controller"), "config", "wbqp_params.yaml"),
+        description="Path to wbqp_controller params YAML."
+    )
 
     real = LaunchConfiguration("real")
     joy = LaunchConfiguration("joy")
     gui_arm = LaunchConfiguration("gui_arm")
+    wbqp_params_file = LaunchConfiguration("wbqp_params_file")
 
     # Package share paths
     pkg_manip = get_package_share_directory("manipulators")
@@ -103,7 +108,9 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_wbqp, "launch", "wbqp_controller.launch.py")
         ),
-        launch_arguments={}.items()
+        launch_arguments={
+            "params_file": wbqp_params_file,
+        }.items()
     )
 
     # 7) TCP pose converter (always)
@@ -115,7 +122,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        real_arg, joy_arg, gui_arg,
+        real_arg, joy_arg, gui_arg, wbqp_params_arg,
         ur5e_planner,
         real_driver,
         rtde_ctrl,

@@ -1,6 +1,6 @@
-
 #include "wbqp_controller/qp_solver_native.hpp"
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 
@@ -215,30 +215,76 @@ namespace wbqp
         Eigen::SparseMatrix<double> Aacc; Eigen::VectorXd lA, uA;
         buildAccelConstraints(in, Aacc, lA, uA);
 
+        const std::size_t n_extra = in.extra_A_rows.size();
+        if (in.extra_l.size() != n_extra || in.extra_u.size() != n_extra)
+        {
+            throw std::invalid_argument("NativeQpInput extra constraints size mismatch");
+        }
+
         // Add variable bounds as linear rows: [I; -I] z ≤ [ub; -lb]
-        Eigen::SparseMatrix<double> Ab(Aacc.rows()+2*9, 9);
-        std::vector<Eigen::Triplet<double>> trips; trips.reserve(Aacc.nonZeros()+2*9);
+        const int r_acc = static_cast<int>(Aacc.rows());
+        const int r_box = 2 * 9;
+        const int r_extra = static_cast<int>(n_extra);
+        const int r_total = r_acc + r_box + r_extra;
+
+        Eigen::SparseMatrix<double> Ab(r_total, 9);
+        std::vector<Eigen::Triplet<double>> trips;
+        trips.reserve(Aacc.nonZeros() + 2 * 9 + r_extra * 9);
         for (int k=0;k<Aacc.outerSize();++k)
             for (Eigen::SparseMatrix<double>::InnerIterator it(Aacc,k); it; ++it)
             trips.emplace_back(it.row(), it.col(), it.value());
-        const int r0 = static_cast<int>(Aacc.rows());
+        const int r0 = r_acc;
         for (int i=0;i<9;++i) {
             trips.emplace_back(r0+i,   i,  1.0);
             trips.emplace_back(r0+9+i, i, -1.0);
         }
+        const int r1 = r0 + r_box;
+        for (int r = 0; r < r_extra; ++r)
+        {
+            const auto &row = in.extra_A_rows[r];
+            for (int c = 0; c < 9; ++c)
+            {
+                if (std::abs(row[c]) > 1.0e-12)
+                {
+                    trips.emplace_back(r1 + r, c, row[c]);
+                }
+            }
+        }
         Ab.setFromTriplets(trips.begin(), trips.end());
 
-        Eigen::VectorXd lAll(Ab.rows()),       uAll(Ab.rows());
-        lAll.head(r0) = lA;                    uAll.head(r0) = uA;
+        Eigen::VectorXd lAll(Ab.rows()), uAll(Ab.rows());
+        lAll.head(r0) = lA;                     uAll.head(r0) = uA;
         lAll.segment(r0,9).setConstant(-1e20); uAll.segment(r0,9) = ub;      // I z ≤ ub
-        lAll.tail(9).setConstant(-1e20);       uAll.tail(9)       = -lb;     // -I z ≤ -lb
+        lAll.segment(r0 + 9,9).setConstant(-1e20);
+        uAll.segment(r0 + 9,9) = -lb;                                              // -I z ≤ -lb
+        if (r_extra > 0)
+        {
+            for (int r = 0; r < r_extra; ++r)
+            {
+                lAll[r1 + r] = in.extra_l[r];
+                uAll[r1 + r] = in.extra_u[r];
+            }
+        }
 
         // Sparse H for OSQP
         Eigen::SparseMatrix<double> Hs = H.sparseView();
         NativeQpOutput out{};
         if (solveOsqp(Hs, f, Ab, lAll, uAll, dqprev, out)) return out;
 
-        // Fallback
+        // Fallback:
+        // If extra hard constraints are present, return clamped previous command
+        // instead of unconstrained closed-form, to avoid violating hard rows by design.
+        if (r_extra > 0)
+        {
+            NativeQpOutput out_prev{};
+            for (int i=0;i<9;++i)
+            {
+                out_prev[i] = std::max(lb[i], std::min(ub[i], dqprev[i]));
+            }
+            return out_prev;
+        }
+
+        // Fallback (no extra hard rows)
         NativeQpOutput out_f{};
         solveFallback(H, f, lb, ub, out_f);
         return out_f;

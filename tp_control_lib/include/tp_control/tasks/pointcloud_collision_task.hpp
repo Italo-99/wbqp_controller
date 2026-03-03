@@ -15,6 +15,7 @@ public:
     double d_act = 0.30;
     double k = 2.0;
     int max_constraints = 128; // max active pairs per cycle (cap for speed)
+    bool use_closest_obstacle = true; // true => one nearest obstacle per robot point
     std::vector<PointRequest> robot_points; // representative points
   };
 

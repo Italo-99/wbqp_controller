@@ -41,55 +41,62 @@ void PointCloudCollisionTask::update(const Context& cx, Eigen::Ref<Mat> J_out, E
     return;
   }
 
-  // For each robot point, find the closest obstacle point (simple O(N*M)).
-  // You will replace this with KD-tree pruning. We still cap constraints by max_constraints.
+  // For each robot point, either:
+  // - use only closest obstacle (default), or
+  // - use all obstacle points.
   for (const auto& req : p_.robot_points) {
     if (m_active_ >= m_cap_) break;
 
     const Eigen::Vector3d pr = cx.kin.pointPosition(req);
-
-    double best_d2 = std::numeric_limits<double>::infinity();
-    Eigen::Vector3d best_po = Eigen::Vector3d::Zero();
-
-    for (const auto& po : cx.obs.points) {
-      const double d2 = (pr - po).squaredNorm();
-      if (d2 < best_d2) {
-        best_d2 = d2;
-        best_po = po;
+    std::vector<Eigen::Vector3d> candidates;
+    if (p_.use_closest_obstacle) {
+      double best_d2 = std::numeric_limits<double>::infinity();
+      Eigen::Vector3d best_po = Eigen::Vector3d::Zero();
+      for (const auto& po : cx.obs.points) {
+        const double d2 = (pr - po).squaredNorm();
+        if (d2 < best_d2) {
+          best_d2 = d2;
+          best_po = po;
+        }
       }
-    }
-
-    const double d = std::sqrt(std::max(0.0, best_d2));
-    if (d >= p_.d_act) {
-      continue;
-    }
-
-    // activation between d_safe and d_act
-    double alpha = 0.0;
-    if (d <= p_.d_safe) {
-      alpha = 1.0;
+      if (std::isfinite(best_d2)) {
+        candidates.push_back(best_po);
+      }
     } else {
-      const double t = (p_.d_act - d) / std::max(1e-12, (p_.d_act - p_.d_safe));
-      alpha = smoothstep(t);
+      candidates.assign(cx.obs.points.begin(), cx.obs.points.end());
     }
 
-    // desired distance rate (spring-like): d* = k * alpha * (d_safe - d)
-    const double d_star = p_.k * alpha * (p_.d_safe - d);
+    for (const auto& po : candidates) {
+      if (m_active_ >= m_cap_) {
+        break;
+      }
 
-    // gradient: grad_q d = ((pr-po)^T / ||pr-po||) * Jp
-    Eigen::Vector3d dir = pr - best_po;
-    const double norm = dir.norm();
-    if (norm < 1e-9) {
-      continue;
+      const Eigen::Vector3d diff = pr - po;
+      const double d = diff.norm();
+      if (d >= p_.d_act || d < 1e-9) {
+        continue;
+      }
+
+      // activation between d_safe and d_act
+      double alpha = 0.0;
+      if (d <= p_.d_safe) {
+        alpha = 1.0;
+      } else {
+        const double t = (p_.d_act - d) / std::max(1e-12, (p_.d_act - p_.d_safe));
+        alpha = smoothstep(t);
+      }
+
+      // desired distance rate (spring-like): d* = k * alpha * (d_safe - d)
+      const double d_star = p_.k * alpha * (p_.d_safe - d);
+      const Eigen::Vector3d dir = diff / d;
+
+      cx.kin.pointJacobian(req, Jp_); // 3 x n
+      // row = dir^T * Jp  (1 x n)
+      J_out.row(m_active_) = dir.transpose() * Jp_;
+      d_out(m_active_) = d_star;
+      a_out(m_active_) = 1.0; // alpha already inside d_star
+      m_active_++;
     }
-    dir /= norm;
-
-    cx.kin.pointJacobian(req, Jp_); // 3 x n
-    // row = dir^T * Jp  (1 x n)
-    J_out.row(m_active_) = dir.transpose() * Jp_;
-    d_out(m_active_) = d_star;
-    a_out(m_active_) = 1.0; // alpha already inside d_star; alternatively set a_out=alpha and d=k*(d_safe-d)
-    m_active_++;
   }
 }
 

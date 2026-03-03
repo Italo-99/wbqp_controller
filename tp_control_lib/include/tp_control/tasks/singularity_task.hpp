@@ -1,6 +1,7 @@
 
 #pragma once
 #include "tp_control/task.hpp"
+#include <string>
 
 namespace tp_control {
 
@@ -8,6 +9,7 @@ class SingularityTask final : public ITask {
 public:
   struct Params {
     int priority = 3;
+    std::string method = "yoshikawa"; // "yoshikawa" | "det"
     double mu_min = 0.02;
     double mu_max = 0.05;
     double mu_safe = 0.06;
@@ -26,9 +28,15 @@ public:
   void update(const Context& cx, Eigen::Ref<Mat> J_out, Eigen::Ref<Vec> d_out, Eigen::Ref<Vec> a_out) override;
 
 private:
+  enum class Method {
+    YOSHIKAWA,
+    DET
+  };
+
   Params p_;
   int n_ = 0;
   int n_arm_ = 0;
+  Method method_ = Method::YOSHIKAWA;
 
   // scratch
   Mat Jarm_; // 6 x n_arm
@@ -38,8 +46,10 @@ private:
   static double clamp01(double x);
   static double smoothstep(double t);
 
-  // Yoshikawa manipulability mu = sqrt(det(J J^T))
-  static double manipulabilityYoshikawa(const Mat& J);
+  // Manipulability metrics
+  static double manipulabilityYoshikawa(const Mat& J); // mu = sqrt(det(J J^T))
+  static double manipulabilityDet(const Mat& J);       // mu = |det(J)| (for square J)
+  double manipulability(const Mat& J) const;
 };
 
 } // namespace tp_control
