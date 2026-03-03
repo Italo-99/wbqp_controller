@@ -1,5 +1,6 @@
 #include "wbqp_controller/qp_solver_native.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -8,52 +9,55 @@ namespace wbqp
 {
     namespace
     {
-        const Eigen::Matrix<double,6,6>& taskWeightMatrix()
+        bool isFiniteSparse(const Eigen::SparseMatrix<double>& M)
         {
-            static const Eigen::Matrix<double,6,6> Wt = [] {
-                Eigen::Matrix<double,6,6> m = Eigen::Matrix<double,6,6>::Zero();
-                for (int i = 0; i < 3; ++i) { m(i,i) = NativeQpConfig::W_lin; }
-                for (int i = 3; i < 6; ++i) { m(i,i) = NativeQpConfig::W_ang; }
-                return m;
-            }();
-            return Wt;
+            for (int c = 0; c < M.outerSize(); ++c)
+            {
+                for (Eigen::SparseMatrix<double>::InnerIterator it(M, c); it; ++it)
+                {
+                    if (!std::isfinite(it.value()))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
 
-        const Eigen::Matrix<double,9,9>& regularizationContribution()
+        Eigen::Matrix<double,6,6> taskWeightMatrix(const NativeQpInput& in)
         {
-            static const Eigen::Matrix<double,9,9> Hreg = [] {
-                Eigen::Matrix<double,9,9> R = Eigen::Matrix<double,9,9>::Zero();
-                for (int i = 0; i < 6; ++i) { R(i,i) = NativeQpConfig::beta_arm; }
-                R(6,6) = NativeQpConfig::alpha_xy;
-                R(7,7) = NativeQpConfig::alpha_xy;
-                R(8,8) = NativeQpConfig::alpha_yaw;
-                return 2.0 * (R + NativeQpConfig::nu * Eigen::Matrix<double,9,9>::Identity());
-            }();
-            return Hreg;
+            Eigen::Matrix<double,6,6> m = Eigen::Matrix<double,6,6>::Zero();
+            for (int i = 0; i < 3; ++i) { m(i,i) = in.w_lin; }
+            for (int i = 3; i < 6; ++i) { m(i,i) = in.w_ang; }
+            return m;
         }
 
-        const Eigen::Matrix<double,9,1>& baseLowerBounds()
+        Eigen::Matrix<double,9,9> regularizationContribution(const NativeQpInput& in)
         {
-            static const Eigen::Matrix<double,9,1> lb = [] {
-                Eigen::Matrix<double,9,1> v;
-                v << -NativeQpConfig::max_dotq, -NativeQpConfig::max_dotq, -NativeQpConfig::max_dotq,
-                     -NativeQpConfig::max_dotq, -NativeQpConfig::max_dotq, -NativeQpConfig::max_dotq,
-                     -NativeQpConfig::max_V, -NativeQpConfig::max_V, -NativeQpConfig::max_Omegaz;
-                return v;
-            }();
-            return lb;
+            Eigen::Matrix<double,9,9> R = Eigen::Matrix<double,9,9>::Zero();
+            for (int i = 0; i < 6; ++i) { R(i,i) = in.beta_arm; }
+            R(6,6) = in.alpha_xy;
+            R(7,7) = in.alpha_xy;
+            R(8,8) = in.alpha_yaw;
+            return 2.0 * (R + in.nu * Eigen::Matrix<double,9,9>::Identity());
         }
 
-        const Eigen::Matrix<double,9,1>& baseUpperBounds()
+        Eigen::Matrix<double,9,1> baseLowerBounds(const NativeQpInput& in)
         {
-            static const Eigen::Matrix<double,9,1> ub = [] {
-                Eigen::Matrix<double,9,1> v;
-                v << NativeQpConfig::max_dotq, NativeQpConfig::max_dotq, NativeQpConfig::max_dotq,
-                     NativeQpConfig::max_dotq, NativeQpConfig::max_dotq, NativeQpConfig::max_dotq,
-                     NativeQpConfig::max_V, NativeQpConfig::max_V, NativeQpConfig::max_Omegaz;
-                return v;
-            }();
-            return ub;
+            Eigen::Matrix<double,9,1> v;
+            v << -in.max_dotq, -in.max_dotq, -in.max_dotq,
+                 -in.max_dotq, -in.max_dotq, -in.max_dotq,
+                 -in.max_V, -in.max_V, -in.max_Omegaz;
+            return v;
+        }
+
+        Eigen::Matrix<double,9,1> baseUpperBounds(const NativeQpInput& in)
+        {
+            Eigen::Matrix<double,9,1> v;
+            v << in.max_dotq, in.max_dotq, in.max_dotq,
+                 in.max_dotq, in.max_dotq, in.max_dotq,
+                 in.max_V, in.max_V, in.max_Omegaz;
+            return v;
         }
     } // namespace
 
@@ -67,35 +71,59 @@ namespace wbqp
     void NativeQpSolver::buildTask(const Eigen::Matrix<double,6,9>& J,
                                    const Eigen::Matrix<double,6,1>& u,
                                    const Eigen::Matrix<double,9,1>& dqprev,
+                                   const NativeQpInput& in,
                                    Eigen::Matrix<double,9,9>& H,
                                    Eigen::Matrix<double,9,1>& f)
     {
-        const Eigen::Matrix<double,6,6>& Wt = taskWeightMatrix();
+        const Eigen::Matrix<double,6,6> Wt = taskWeightMatrix(in);
 
         // 0.5 z^T H z + f^T z with 2x scaling to match LS normal equations convention
         H = 2.0 * (J.transpose() * Wt * J);
-        f = -2.0 * (J.transpose() * Wt * u + NativeQpConfig::nu * dqprev);
+        f = -2.0 * (J.transpose() * Wt * u + in.nu * dqprev);
     }
 
-    void NativeQpSolver::buildReg(Eigen::Matrix<double,9,9>& H)
+    void NativeQpSolver::buildReg(Eigen::Matrix<double,9,9>& H,
+                                  const NativeQpInput& in)
     {
-        H += regularizationContribution();
+        H += regularizationContribution(in);
     }
 
     void NativeQpSolver::buildVarBounds(const NativeQpInput& in,
                                         Eigen::Matrix<double,9,1> &lb,
                                         Eigen::Matrix<double,9,1> &ub)
     {
-        lb = baseLowerBounds();
-        ub = baseUpperBounds();
+        lb = baseLowerBounds(in);
+        ub = baseUpperBounds(in);
+
+        // Robustness margin around true joint limits to avoid one-step infeasibility
+        // from tiny violations / discretization effects.
+        const double m = 6.0 * in.max_dotq * in.dt;
 
         // Joints: velocity box AND position window this step: q + dq*dt ∈ [qmin,qmax]
-        for (int i=0;i<6;++i) {
-            const double lb_pos = (in.qmin[i] - in.q[i]) / in.dt;
-            const double ub_pos = (in.qmax[i] - in.q[i]) / in.dt;
-            const double lb_i = std::max(baseLowerBounds()[i], lb_pos);
-            const double ub_i = std::min(baseUpperBounds()[i], ub_pos);
-            lb[i] = lb_i; ub[i] = ub_i;
+        for (int i = 0; i < 6; ++i) {
+            const double qmin_true = in.qmin[i];
+            const double qmax_true = in.qmax[i];
+            const double qmin_eff = qmin_true - m;
+            const double qmax_eff = qmax_true + m;
+
+            const double lb_pos = (qmin_eff - in.q[i]) / in.dt;
+            const double ub_pos = (qmax_eff - in.q[i]) / in.dt;
+
+            double lb_i = std::max(lb[i], lb_pos);
+            double ub_i = std::min(ub[i], ub_pos);
+
+            // Directional gating near/over true bounds:
+            // close to lower bound -> do not command further negative motion;
+            // close to upper bound -> do not command further positive motion.
+            if (in.q[i] <= qmin_true + m) {
+                lb_i = std::max(lb_i, 0.0);
+            }
+            if (in.q[i] >= qmax_true - m) {
+                ub_i = std::min(ub_i, 0.0);
+            }
+
+            lb[i] = lb_i;
+            ub[i] = ub_i;
         }
     }
 
@@ -117,9 +145,9 @@ namespace wbqp
         uA = Eigen::VectorXd(rows);
 
         auto dcap = [&](int idx)->double{
-            if (idx<6) return NativeQpConfig::qddot_max * in.dt;
-            if (idx<8) return NativeQpConfig::a_lin_max * in.dt; // 6,7
-            return NativeQpConfig::alpha_max * in.dt;            // 8
+            if (idx<6) return in.qddot_max * in.dt;
+            if (idx<8) return in.a_lin_max * in.dt; // 6,7
+            return in.alpha_max * in.dt;            // 8
         };
 
         for (int i=0;i<9;++i) {
@@ -199,6 +227,40 @@ namespace wbqp
 
     NativeQpOutput NativeQpSolver::solve(const NativeQpInput &in)
     {
+        if (!std::isfinite(in.dt) || in.dt <= 1.0e-9)
+        {
+            throw std::invalid_argument("NativeQpSolver: dt must be finite and > 1e-9");
+        }
+
+        for (int i = 0; i < 54; ++i)
+        {
+            if (!std::isfinite(in.J6x9_colmajor[i]))
+            {
+                throw std::invalid_argument("NativeQpSolver: non-finite Jacobian entry");
+            }
+        }
+        for (int i = 0; i < 6; ++i)
+        {
+            if (!std::isfinite(in.u_star[i]) ||
+                !std::isfinite(in.q[i]) ||
+                !std::isfinite(in.qmin[i]) ||
+                !std::isfinite(in.qmax[i]))
+            {
+                throw std::invalid_argument("NativeQpSolver: non-finite u_star/q/qmin/qmax");
+            }
+            if (in.qmin[i] > in.qmax[i])
+            {
+                throw std::invalid_argument("NativeQpSolver: qmin > qmax");
+            }
+        }
+        for (int i = 0; i < 9; ++i)
+        {
+            if (!std::isfinite(in.dotq_prev[i]))
+            {
+                throw std::invalid_argument("NativeQpSolver: non-finite dotq_prev");
+            }
+        }
+
         // Map inputs
         const Eigen::Matrix<double,6,9> J = mapJ(in.J6x9_colmajor);
         Eigen::Matrix<double,6,1> u; for (int i=0;i<6;++i) u[i] = in.u_star[i];
@@ -206,19 +268,87 @@ namespace wbqp
         
         // Build quadratic objective
         Eigen::Matrix<double,9,9> H; Eigen::Matrix<double,9,1> f;
-        buildTask(J, u, dqprev, H, f);
-        buildReg(H);
+        buildTask(J, u, dqprev, in, H, f);
+        buildReg(H, in);
+        if (!H.allFinite() || !f.allFinite())
+        {
+            throw std::invalid_argument("NativeQpSolver: objective has non-finite values");
+        }
 
         // Bounds and linear constraints
         Eigen::Matrix<double,9,1> lb, ub; buildVarBounds(in, lb, ub);
+        if (!lb.allFinite() || !ub.allFinite())
+        {
+            throw std::invalid_argument("NativeQpSolver: non-finite variable bounds");
+        }
+        for (int i = 0; i < 9; ++i)
+        {
+            if (lb[i] > ub[i])
+            {
+                if (i < 6)
+                {
+                    char msg[512];
+                    std::snprintf(
+                        msg,
+                        sizeof(msg),
+                        "NativeQpSolver: inconsistent variable bounds (lb > ub) at joint[%d]: "
+                        "q=%.9f rad, qmin=%.9f rad, qmax=%.9f rad, lb=%.9f rad/s, ub=%.9f rad/s, "
+                        "dt=%.9f s, max_dotq=%.9f rad/s",
+                        i,
+                        in.q[i],
+                        in.qmin[i],
+                        in.qmax[i],
+                        lb[i],
+                        ub[i],
+                        in.dt,
+                        in.max_dotq);
+                    throw std::invalid_argument(msg);
+                }
+                else
+                {
+                    char msg[384];
+                    std::snprintf(
+                        msg,
+                        sizeof(msg),
+                        "NativeQpSolver: inconsistent variable bounds (lb > ub) at var[%d]: "
+                        "lb=%.9f, ub=%.9f",
+                        i,
+                        lb[i],
+                        ub[i]);
+                    throw std::invalid_argument(msg);
+                }
+            }
+        }
 
         Eigen::SparseMatrix<double> Aacc; Eigen::VectorXd lA, uA;
         buildAccelConstraints(in, Aacc, lA, uA);
+        if (!lA.allFinite() || !uA.allFinite() || !isFiniteSparse(Aacc))
+        {
+            throw std::invalid_argument("NativeQpSolver: non-finite acceleration constraints");
+        }
 
         const std::size_t n_extra = in.extra_A_rows.size();
         if (in.extra_l.size() != n_extra || in.extra_u.size() != n_extra)
         {
             throw std::invalid_argument("NativeQpInput extra constraints size mismatch");
+        }
+        for (std::size_t r = 0; r < n_extra; ++r)
+        {
+            if (!std::isfinite(in.extra_l[r]) || !std::isfinite(in.extra_u[r]))
+            {
+                throw std::invalid_argument("NativeQpSolver: non-finite extra row bounds");
+            }
+            if (in.extra_l[r] > in.extra_u[r])
+            {
+                throw std::invalid_argument("NativeQpSolver: inconsistent extra row bounds (l > u)");
+            }
+            for (int c = 0; c < 9; ++c)
+            {
+                if (!std::isfinite(in.extra_A_rows[r][c]))
+                {
+                    throw std::invalid_argument("NativeQpSolver: non-finite extra constraint row entry");
+                }
+            }
         }
 
         // Add variable bounds as linear rows: [I; -I] z ≤ [ub; -lb]
@@ -265,9 +395,17 @@ namespace wbqp
                 uAll[r1 + r] = in.extra_u[r];
             }
         }
+        if (!lAll.allFinite() || !uAll.allFinite() || !isFiniteSparse(Ab))
+        {
+            throw std::invalid_argument("NativeQpSolver: non-finite assembled constraints");
+        }
 
         // Sparse H for OSQP
         Eigen::SparseMatrix<double> Hs = H.sparseView();
+        if (!isFiniteSparse(Hs))
+        {
+            throw std::invalid_argument("NativeQpSolver: non-finite Hessian");
+        }
         NativeQpOutput out{};
         if (solveOsqp(Hs, f, Ab, lAll, uAll, dqprev, out)) return out;
 

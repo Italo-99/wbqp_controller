@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
@@ -1180,6 +1181,7 @@ bool WbqpControllerNode::loopStep()
 
     double x_opt[9];
     bool solver_ok = true;
+    bool zero_output_this_cycle = false;
     try
     {
         if (tp_method_)
@@ -1200,11 +1202,27 @@ bool WbqpControllerNode::loopStep()
     {
         RCLCPP_ERROR(this->get_logger(), "Controller solver failed: %s", e.what());
         solver_ok = false;
+        if (std::strstr(e.what(), "inconsistent variable bounds (lb > ub)") != nullptr)
+        {
+            zero_output_this_cycle = true;
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(),
+                *this->get_clock(),
+                1000,
+                "QP infeasible due to bounds mismatch. Publishing zero commands for this cycle.");
+        }
     }
 
     if (!solver_ok)
     {
-        for (int i=0;i<9;++i) { x_opt[i] = dotq_prev_[i]; }
+        if (zero_output_this_cycle)
+        {
+            for (double &v : x_opt) { v = 0.0; }
+        }
+        else
+        {
+            for (int i=0;i<9;++i) { x_opt[i] = dotq_prev_[i]; }
+        }
     }
 
     bool xopt_ok = checkXoptValues(x_opt);
@@ -1339,6 +1357,20 @@ void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
     cfg.a_lin_max  = this->get_parameter("qp.a_lin_max").as_double();
     cfg.alpha_max  = this->get_parameter("qp.alpha_max").as_double();
 
+    // Cache YAML values for native runtime solver.
+    qp_beta_arm_ = cfg.beta_arm;
+    qp_alpha_xy_ = cfg.alpha_xy;
+    qp_alpha_yaw_ = cfg.alpha_yaw;
+    qp_w_lin_ = cfg.w_lin;
+    qp_w_ang_ = cfg.w_ang;
+    qp_nu_ = cfg.nu;
+    qp_max_dotq_ = cfg.max_dotq;
+    qp_max_V_ = cfg.max_V;
+    qp_max_Omegaz_ = cfg.max_Omegaz;
+    qp_qddot_max_ = cfg.qddot_max;
+    qp_a_lin_max_ = cfg.a_lin_max;
+    qp_alpha_max_ = cfg.alpha_max;
+
     // --- Joint limits arrays ---
     this->declare_parameter("limits.qmin", std::vector<double>{-10.0, -120.0, -135.0, -135.0, 0.0, -180.0});
     this->declare_parameter("limits.qmax", std::vector<double>{ 90.0,  -85.0,    0.0,   90.0, 110.0, 180.0});
@@ -1394,6 +1426,15 @@ void WbqpControllerNode::reduce_J_6x12_to_6x9(const double J6x12_colmajor[72],
 // ------------------- C++ JACOBIAN (wb_jac) ------------------- //
 void WbqpControllerNode::initKinematics()
 {
+    // In pure vendor-QP mode, wb_jac is not used in the control loop.
+    if (!use_jac_ros2_ && !tp_method_)
+    {
+        RCLCPP_INFO(
+            this->get_logger(),
+            "Using vendor WholeBodyJacobian path (use_jac_ros2=false, tp_method=false).");
+        return;
+    }
+
     // Set DH params from config
     kin_.setDH(dh_params_);
 
@@ -1414,8 +1455,10 @@ void WbqpControllerNode::initKinematics()
     kin_.setTcpOffset(tcp_offset_[0], tcp_offset_[1], tcp_offset_[2],
                       tcp_offset_[3], tcp_offset_[4], tcp_offset_[5]);
 
-    RCLCPP_INFO(this->get_logger(), "C++ Jacobian (wb_jac) initialized [%s frame].",
-                jac_to_world_ ? "world" : "body");
+    RCLCPP_INFO(
+        this->get_logger(),
+        "C++ Jacobian (wb_jac) initialized [%s frame].",
+        jac_to_world_ ? "world" : "body");
 }
 
 void WbqpControllerNode::computeJacobianRos2(double J6x9_colmajor[54]) const
@@ -1568,6 +1611,18 @@ void WbqpControllerNode::solve_qp_native(const struct1_T &in, const double J6x9_
     for (int i=0;i<6;++i) { nin.u_star[i] = in.u_star[i]; nin.q[i] = in.q[i]; nin.qmin[i] = in_qmin_from_cfg_or_params_[i]; nin.qmax[i] = in_qmax_from_cfg_or_params_[i]; }
     for (int i=0;i<9;++i) nin.dotq_prev[i] = in.dotq_prev[i];
     nin.dt = in.dt;
+    nin.w_lin = qp_w_lin_;
+    nin.w_ang = qp_w_ang_;
+    nin.beta_arm = qp_beta_arm_;
+    nin.alpha_xy = qp_alpha_xy_;
+    nin.alpha_yaw = qp_alpha_yaw_;
+    nin.nu = qp_nu_;
+    nin.max_dotq = qp_max_dotq_;
+    nin.max_V = qp_max_V_;
+    nin.max_Omegaz = qp_max_Omegaz_;
+    nin.qddot_max = qp_qddot_max_;
+    nin.a_lin_max = qp_a_lin_max_;
+    nin.alpha_max = qp_alpha_max_;
 
     CollisionPointModelConfig collision_cfg;
     collision_cfg.dh_params = dh_params_;

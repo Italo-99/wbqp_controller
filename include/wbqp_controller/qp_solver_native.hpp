@@ -44,6 +44,19 @@ namespace wbqp
         double                dt{0.002};
         std::array<double,6>  qmin{ {-0.0000, -2.0944, -2.3562, -2.3562, -0.0000, -3.1416} };
         std::array<double,6>  qmax{ {+1.5708, -1.4835, +0.0000, +1.5708, +1.9199, +3.1416} };
+        // Runtime QP tuning from YAML (falls back to NativeQpConfig defaults).
+        double                w_lin{NativeQpConfig::W_lin};
+        double                w_ang{NativeQpConfig::W_ang};
+        double                beta_arm{NativeQpConfig::beta_arm};
+        double                alpha_xy{NativeQpConfig::alpha_xy};
+        double                alpha_yaw{NativeQpConfig::alpha_yaw};
+        double                nu{NativeQpConfig::nu};
+        double                max_dotq{NativeQpConfig::max_dotq};
+        double                max_V{NativeQpConfig::max_V};
+        double                max_Omegaz{NativeQpConfig::max_Omegaz};
+        double                qddot_max{NativeQpConfig::qddot_max};
+        double                a_lin_max{NativeQpConfig::a_lin_max};
+        double                alpha_max{NativeQpConfig::alpha_max};
 
         // Optional extra linear hard constraints:
         // For each row k: extra_l[k] <= extra_A[k] * z <= extra_u[k]
@@ -69,10 +82,12 @@ namespace wbqp
         static void buildTask(const Eigen::Matrix<double,6,9>& J,
                             const Eigen::Matrix<double,6,1>& u,
                             const Eigen::Matrix<double,9,1>& dqprev,
+                            const NativeQpInput& in,
                             Eigen::Matrix<double,9,9>& H,
                             Eigen::Matrix<double,9,1>& f);
 
-        static void buildReg(Eigen::Matrix<double,9,9>& H);
+        static void buildReg(Eigen::Matrix<double,9,9>& H,
+                             const NativeQpInput& in);
 
         static void buildVarBounds(const NativeQpInput& in,
                                 Eigen::Matrix<double,9,1> &lb,

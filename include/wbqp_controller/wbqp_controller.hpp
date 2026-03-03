@@ -153,6 +153,19 @@ private:
     bool use_native_qp_ = true;
     std::array<double,6> in_qmin_from_cfg_or_params_{};
     std::array<double,6> in_qmax_from_cfg_or_params_{};
+    // Runtime native-QP tuning loaded from params (qp.*).
+    double qp_w_lin_ = 1.0;
+    double qp_w_ang_ = 1.0;
+    double qp_beta_arm_ = 0.001;
+    double qp_alpha_xy_ = 0.002;
+    double qp_alpha_yaw_ = 0.002;
+    double qp_nu_ = 0.001;
+    double qp_max_dotq_ = 1.0;
+    double qp_max_V_ = 0.2;
+    double qp_max_Omegaz_ = 0.2;
+    double qp_qddot_max_ = 2.0;
+    double qp_a_lin_max_ = 1.0;
+    double qp_alpha_max_ = 1.0;
 
     // QP-native method parameters (qp.*)
     bool qp_singularity_enable_ = false;
