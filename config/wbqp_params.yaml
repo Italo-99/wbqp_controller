@@ -41,7 +41,7 @@
       w_lin: 1.0                                  # weight for the linear velocity tracking
       w_ang: 1.0                                  # weight for the angular velocity tracking (set to 0.0 if no orientation constraints)
       nu: 0.001                                   # weight for the slack variable (soft constraint for twist tracking)
-      max_dotq: 0.5                               # maximum joint speed (rad/s)
+      max_dotq: 1.0                               # maximum joint speed (rad/s)
       max_V: 0.2                                  # maximum linear velocity of the mobile base (m/s)
       max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
       
@@ -81,7 +81,7 @@
       qmin: [-10.0, -120.0, -135.0, -135.0,   0.0, -180.0]  # min boundaries [deg]
       qmax: [ 90.0,  -85.0,    0.0,   90.0, 110.0,  180.0]  # max boundaries [deg]
       
-      qddot_max: 5.0                              # maximum joint acceleration (rad/s^2)
+      qddot_max: 2.0                              # maximum joint acceleration (rad/s^2)
       a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)
       alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
 

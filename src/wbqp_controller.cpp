@@ -442,12 +442,26 @@ class WbqpTpKinematicsProvider final : public tp_control::IKinematicsProvider
 public:
     explicit WbqpTpKinematicsProvider(const MobileManipulatorKinematics* kin,
                                       bool jac_to_world,
+                                      bool use_vendor_jacobian,
+                                      const std::array<double, 3>& p_n2b,
+                                      const std::array<double, 3>& theta_n2b,
+                                      const std::vector<int>& cols1based,
                                       const CollisionPointModelConfig& collision_cfg)
-    : kin_(kin), jac_to_world_(jac_to_world), collision_cfg_(collision_cfg)
+    : kin_(kin),
+      jac_to_world_(jac_to_world),
+      use_vendor_jacobian_(use_vendor_jacobian),
+      p_n2b_(p_n2b),
+      theta_n2b_(theta_n2b),
+      cols1based_(cols1based),
+      collision_cfg_(collision_cfg)
     {
         if (kin_ == nullptr)
         {
             throw std::invalid_argument("WbqpTpKinematicsProvider: kin is null");
+        }
+        if (cols1based_.size() != 9)
+        {
+            throw std::invalid_argument("WbqpTpKinematicsProvider: cols1based must have size 9");
         }
         q_tp_.setZero(9);
     }
@@ -469,7 +483,12 @@ public:
     {
         const Eigen::Matrix<double, 6, 1> q_arm = q_tp_.segment<6>(3);
         Eigen::Matrix4d T;
-        if (jac_to_world_)
+        if (use_vendor_jacobian_)
+        {
+            // Keep TP pose/jacobian frame coherent in vendor branch.
+            T = kin_->forwardKinematicsNC(q_arm);
+        }
+        else if (jac_to_world_)
         {
             MobileManipulatorKinematics::BasePose2D base_pose;
             base_pose.px = q_tp_(0);
@@ -495,19 +514,47 @@ public:
             throw std::invalid_argument("WbqpTpKinematicsProvider::eeJacobian expects 6x9");
         }
 
-        const Eigen::Matrix<double, 6, 1> q_arm = q_tp_.segment<6>(3);
-        Eigen::Matrix<double, 6, 9> J_arm_base;
-        if (jac_to_world_)
+        Eigen::Matrix<double, 6, 9> J_arm_base = Eigen::Matrix<double, 6, 9>::Zero();
+        if (use_vendor_jacobian_)
         {
-            MobileManipulatorKinematics::BasePose2D base_pose;
-            base_pose.px = q_tp_(0);
-            base_pose.py = q_tp_(1);
-            base_pose.yaw = q_tp_(2);
-            J_arm_base = kin_->jacobianWorld(q_arm, base_pose);
+            double in1[15];
+            in1[0] = p_n2b_[0];
+            in1[1] = p_n2b_[1];
+            in1[2] = p_n2b_[2];
+            for (int i = 0; i < 6; ++i) { in1[3 + i] = q_tp_(i + 3); }
+            in1[9] = theta_n2b_[0];
+            in1[10] = theta_n2b_[1];
+            in1[11] = theta_n2b_[2];
+            in1[12] = 0.0;
+            in1[13] = 0.0;
+            in1[14] = q_tp_(2);
+
+            double A6x12_colmajor[72];
+            WholeBodyJacobian(in1, A6x12_colmajor);
+            for (int j = 0; j < 9; ++j)
+            {
+                const int src_c = cols1based_[j] - 1;
+                for (int r = 0; r < 6; ++r)
+                {
+                    J_arm_base(r, j) = A6x12_colmajor[r + 6 * src_c];
+                }
+            }
         }
         else
         {
-            J_arm_base = kin_->jacobianBody(q_arm);
+            const Eigen::Matrix<double, 6, 1> q_arm = q_tp_.segment<6>(3);
+            if (jac_to_world_)
+            {
+                MobileManipulatorKinematics::BasePose2D base_pose;
+                base_pose.px = q_tp_(0);
+                base_pose.py = q_tp_(1);
+                base_pose.yaw = q_tp_(2);
+                J_arm_base = kin_->jacobianWorld(q_arm, base_pose);
+            }
+            else
+            {
+                J_arm_base = kin_->jacobianBody(q_arm);
+            }
         }
 
         // TP state ordering is [base(3), arm(6)].
@@ -522,20 +569,49 @@ public:
             throw std::invalid_argument("WbqpTpKinematicsProvider::armJacobian expects 6x6");
         }
 
-        const Eigen::Matrix<double, 6, 1> q_arm = q_tp_.segment<6>(3);
-        Eigen::Matrix<double, 6, 9> J_arm_base;
-        if (jac_to_world_)
+        Eigen::Matrix<double, 6, 9> J_arm_base = Eigen::Matrix<double, 6, 9>::Zero();
+        if (use_vendor_jacobian_)
         {
-            MobileManipulatorKinematics::BasePose2D base_pose;
-            base_pose.px = q_tp_(0);
-            base_pose.py = q_tp_(1);
-            base_pose.yaw = q_tp_(2);
-            J_arm_base = kin_->jacobianWorld(q_arm, base_pose);
+            double in1[15];
+            in1[0] = p_n2b_[0];
+            in1[1] = p_n2b_[1];
+            in1[2] = p_n2b_[2];
+            for (int i = 0; i < 6; ++i) { in1[3 + i] = q_tp_(i + 3); }
+            in1[9] = theta_n2b_[0];
+            in1[10] = theta_n2b_[1];
+            in1[11] = theta_n2b_[2];
+            in1[12] = 0.0;
+            in1[13] = 0.0;
+            in1[14] = q_tp_(2);
+
+            double A6x12_colmajor[72];
+            WholeBodyJacobian(in1, A6x12_colmajor);
+            for (int j = 0; j < 9; ++j)
+            {
+                const int src_c = cols1based_[j] - 1;
+                for (int r = 0; r < 6; ++r)
+                {
+                    J_arm_base(r, j) = A6x12_colmajor[r + 6 * src_c];
+                }
+            }
         }
         else
         {
-            J_arm_base = kin_->jacobianBody(q_arm);
+            const Eigen::Matrix<double, 6, 1> q_arm = q_tp_.segment<6>(3);
+            if (jac_to_world_)
+            {
+                MobileManipulatorKinematics::BasePose2D base_pose;
+                base_pose.px = q_tp_(0);
+                base_pose.py = q_tp_(1);
+                base_pose.yaw = q_tp_(2);
+                J_arm_base = kin_->jacobianWorld(q_arm, base_pose);
+            }
+            else
+            {
+                J_arm_base = kin_->jacobianBody(q_arm);
+            }
         }
+
         J_arm_out = J_arm_base.leftCols(6);
     }
 
@@ -580,6 +656,10 @@ public:
 private:
     const MobileManipulatorKinematics* kin_ = nullptr;
     bool jac_to_world_ = false;
+    bool use_vendor_jacobian_ = false;
+    std::array<double, 3> p_n2b_{0.0, 0.0, 0.0};
+    std::array<double, 3> theta_n2b_{0.0, 0.0, 0.0};
+    std::vector<int> cols1based_{};
     CollisionPointModelConfig collision_cfg_{};
     mutable tp_control::Vec q_tp_;
     mutable RobotPointModelCache point_cache_;
@@ -1768,7 +1848,23 @@ void WbqpControllerNode::initTaskPriorityController()
     collision_cfg.include_joint_endpoints = tp_collision_include_joint_endpoints_;
     collision_cfg.include_tcp = tp_collision_include_tcp_;
 
-    auto kin_provider = std::make_unique<WbqpTpKinematicsProvider>(&kin_, jac_to_world_, collision_cfg);
+    // TP Jacobian switch:
+    // use_jac_ros2=false -> vendor WholeBodyJacobian
+    // use_jac_ros2=true  -> wb_jac ROS2 path (jac_to_world selects world/base)
+    const bool tp_use_vendor_jacobian = !use_jac_ros2_;
+    if (tp_use_vendor_jacobian && jac_to_world_)
+    {
+        RCLCPP_WARN(this->get_logger(),
+                    "TP vendor Jacobian path selected (use_jac_ros2=false): jacobian.jac_to_world is ignored.");
+    }
+    auto kin_provider = std::make_unique<WbqpTpKinematicsProvider>(
+        &kin_,
+        jac_to_world_,
+        tp_use_vendor_jacobian,
+        std::array<double, 3>{P_N2B_[0], P_N2B_[1], P_N2B_[2]},
+        std::array<double, 3>{theta_N2B_[0], theta_N2B_[1], theta_N2B_[2]},
+        cols1based_,
+        collision_cfg);
 
     std::vector<std::unique_ptr<tp_control::ITask>> tasks;
 
@@ -1861,7 +1957,9 @@ void WbqpControllerNode::initTaskPriorityController()
     tp_controller_ = std::make_unique<tp_control::TaskPriorityController>(
         ctrl_params, std::move(kin_provider), std::move(tasks));
 
-    RCLCPP_INFO(this->get_logger(), "Task-priority controller initialized.");
+    RCLCPP_INFO(this->get_logger(),
+                "Task-priority controller initialized [jacobian: %s].",
+                tp_use_vendor_jacobian ? "vendor WholeBodyJacobian" : "wb_jac ROS2");
 }
 
 void WbqpControllerNode::solve_tp(double x_opt[9])

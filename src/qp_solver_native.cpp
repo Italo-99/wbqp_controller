@@ -95,31 +95,32 @@ namespace wbqp
         lb = baseLowerBounds(in);
         ub = baseUpperBounds(in);
 
-        // Robustness margin around true joint limits to avoid one-step infeasibility
-        // from tiny violations / discretization effects.
-        const double m = 6.0 * in.max_dotq * in.dt;
+        // Feasibility margin used to repair transient inconsistent bounds.
+        const double m = 2.0 * in.max_dotq * in.dt;
 
         // Joints: velocity box AND position window this step: q + dq*dt ∈ [qmin,qmax]
         for (int i = 0; i < 6; ++i) {
-            const double qmin_true = in.qmin[i];
-            const double qmax_true = in.qmax[i];
-            const double qmin_eff = qmin_true - m;
-            const double qmax_eff = qmax_true + m;
-
-            const double lb_pos = (qmin_eff - in.q[i]) / in.dt;
-            const double ub_pos = (qmax_eff - in.q[i]) / in.dt;
+            const double lb_pos = (in.qmin[i] - in.q[i]) / in.dt;
+            const double ub_pos = (in.qmax[i] - in.q[i]) / in.dt;
 
             double lb_i = std::max(lb[i], lb_pos);
             double ub_i = std::min(ub[i], ub_pos);
 
-            // Directional gating near/over true bounds:
-            // close to lower bound -> do not command further negative motion;
-            // close to upper bound -> do not command further positive motion.
-            if (in.q[i] <= qmin_true + m) {
-                lb_i = std::max(lb_i, 0.0);
+            // Repair inconsistent bounds for this cycle:
+            // 1) preferred direction: shift lower bound from upper by margin
+            // 2) reversed fallback if still inconsistent
+            // 3) final collapse to a feasible point in the velocity box
+            if (lb_i > ub_i) {
+                lb_i = ub_i - m;
             }
-            if (in.q[i] >= qmax_true - m) {
-                ub_i = std::min(ub_i, 0.0);
+            if (lb_i > ub_i) {
+                ub_i = lb_i + m;
+            }
+            if (lb_i > ub_i) {
+                const double v_mid = 0.5 * (lb_i + ub_i);
+                const double v_sat = std::max(baseLowerBounds(in)[i], std::min(baseUpperBounds(in)[i], v_mid));
+                lb_i = v_sat;
+                ub_i = v_sat;
             }
 
             lb[i] = lb_i;
