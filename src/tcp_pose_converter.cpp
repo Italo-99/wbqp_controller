@@ -1,7 +1,9 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/buffer.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <tf2/LinearMath/Transform.h>
@@ -25,6 +27,10 @@ public:
         declare_parameter<std::string>("map_frame",         "map");
         declare_parameter<std::string>("mobile_base_frame", "mobile_base");
         declare_parameter<std::string>("base_link_frame",   "base_link");
+        declare_parameter<bool>("publish_mobile_to_ur_world_static_tf", true);
+        declare_parameter<std::string>("ur_world_frame", "world_ur");
+        declare_parameter<std::vector<double>>("mobile_to_ur_world_xyz", {0.0, 0.0, 0.0});
+        declare_parameter<std::vector<double>>("mobile_to_ur_world_rpy", {0.0, 0.0, 0.0});
         declare_parameter<double>("rate_hz", 500.0);
 
         topic_tcp_in_base_ = get_parameter("topic_tcp_in_base").as_string();
@@ -33,6 +39,11 @@ public:
         map_frame_         = get_parameter("map_frame").as_string();
         mobile_base_frame_ = get_parameter("mobile_base_frame").as_string();
         base_link_frame_   = get_parameter("base_link_frame").as_string();
+        publish_mobile_to_ur_world_static_tf_ =
+            get_parameter("publish_mobile_to_ur_world_static_tf").as_bool();
+        ur_world_frame_    = get_parameter("ur_world_frame").as_string();
+        mobile_to_ur_world_xyz_ = get_parameter("mobile_to_ur_world_xyz").as_double_array();
+        mobile_to_ur_world_rpy_ = get_parameter("mobile_to_ur_world_rpy").as_double_array();
 
         loop_rate_hz_ = get_parameter("rate_hz").as_double();
         if (loop_rate_hz_ <= 0.0) { loop_rate_hz_ = 500.0; }
@@ -41,6 +52,7 @@ public:
         // ---------------- TF Buffer/Listener ----------------
         tf_buffer_   = std::make_unique<tf2_ros::Buffer>(this->get_clock());
         tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+        static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
 
         // ---------------- Publisher ----------------
         pub_tcp_in_map_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(topic_tcp_in_map_, 1);
@@ -67,6 +79,9 @@ public:
         rclcpp::contexts::get_global_default_context()->add_pre_shutdown_callback(
             std::bind(&WbqpControllerNode::shutdown_handler, this)
         );
+
+        // ---------------- Optional static TF: mobile_base -> world_ur ----------------
+        publish_mobile_to_ur_world_static_tf();
 
         // ---------------- One-time TF fetch: mobile_base -> base_link ----------------
         fetch_static_mobilebase_to_baselink();
@@ -171,6 +186,37 @@ private:
     }
 
     // ------------ One-time TF fetch ------------
+    void publish_mobile_to_ur_world_static_tf()
+    {
+        if (!publish_mobile_to_ur_world_static_tf_) {
+            return;
+        }
+
+        if (mobile_to_ur_world_xyz_.size() != 3 || mobile_to_ur_world_rpy_.size() != 3) {
+            RCLCPP_ERROR(get_logger(),
+                         "Invalid mobile_to_ur_world_xyz/rpy parameter size. Expected 3 values each.");
+            return;
+        }
+
+        geometry_msgs::msg::TransformStamped t;
+        t.header.stamp = this->get_clock()->now();
+        t.header.frame_id = mobile_base_frame_;
+        t.child_frame_id = ur_world_frame_;
+        t.transform.translation.x = mobile_to_ur_world_xyz_[0];
+        t.transform.translation.y = mobile_to_ur_world_xyz_[1];
+        t.transform.translation.z = mobile_to_ur_world_xyz_[2];
+
+        tf2::Quaternion q;
+        q.setRPY(mobile_to_ur_world_rpy_[0], mobile_to_ur_world_rpy_[1], mobile_to_ur_world_rpy_[2]);
+        q.normalize();
+        t.transform.rotation = tf2::toMsg(q);
+
+        static_tf_broadcaster_->sendTransform(t);
+
+        RCLCPP_INFO(get_logger(), "Publishing static TF %s -> %s",
+                    mobile_base_frame_.c_str(), ur_world_frame_.c_str());
+    }
+
     void fetch_static_mobilebase_to_baselink()
     {
         // Wait up to a few seconds for TF to be available
@@ -213,6 +259,10 @@ private:
     std::string map_frame_;
     std::string mobile_base_frame_;
     std::string base_link_frame_;
+    bool publish_mobile_to_ur_world_static_tf_{true};
+    std::string ur_world_frame_;
+    std::vector<double> mobile_to_ur_world_xyz_;
+    std::vector<double> mobile_to_ur_world_rpy_;
 
     // Publisher / Subscribers
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_tcp_in_map_;
@@ -222,6 +272,7 @@ private:
     // TF
     std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+    std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
     bool have_mobilebase_to_baselink_{false};
     tf2::Transform T_mobile_base_base_link_;
 
