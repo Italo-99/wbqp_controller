@@ -89,6 +89,7 @@ private:
     // Callbacks
     void jointStateCb(const sensor_msgs::msg::JointState::SharedPtr msg);
     void twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr msg);
+    void poseGoalCb(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void armVelCb(const geometry_msgs::msg::Twist::SharedPtr msg);
     void obstaclePointsCb(const geometry_msgs::msg::PoseArray::SharedPtr msg);
     bool loopStep();
@@ -103,6 +104,7 @@ private:
     void solve_qp_native(const struct1_T &in, const double J6x9_colmajor[54], double x_opt[9]);
     void initTaskPriorityController();
     void solve_tp(double x_opt[9]);
+    tp_control::Pose6D computeCurrentEePoseTp(const tp_control::RobotState& state) const;
 
     // C++ Jacobian (wb_jac) computation
     void computeJacobianRos2(double J6x9_colmajor[54]) const;
@@ -145,10 +147,22 @@ private:
     std::string topic_q_speed_;
     std::string topic_arm_vel_;
     std::string topic_arm_vel_cmd_;
+    std::string topic_tcp_pose_goal_;
     std::string topic_emergency_state_;
     std::string emergency_stop_service_name_;
     double dt_;
     bool tp_method_ = false;
+
+    enum class TpTrackingMode
+    {
+        SPEED,
+        POSE
+    };
+    enum class TpPoseSubMode
+    {
+        INCREMENT,
+        INPUT
+    };
 
     bool use_native_qp_ = true;
     std::array<double,6> in_qmin_from_cfg_or_params_{};
@@ -222,6 +236,8 @@ private:
     double tp_singularity_mu_safe_ = 1.5e-4;
     double tp_singularity_k_ = 1.0;
     double tp_singularity_fd_eps_ = 1.0e-4;
+    TpTrackingMode tp_tracking_mode_ = TpTrackingMode::SPEED;
+    TpPoseSubMode tp_pose_sub_mode_ = TpPoseSubMode::INCREMENT;
     std::string topic_obstacle_points_;
 
     std::vector<int> cols1based_;
@@ -254,6 +270,8 @@ private:
     double arm_vel_[6]      = {0,0,0,0,0,0};  // latest arm twist from sensing
     bool have_js_           = false;
     bool have_twist_        = false;
+    bool have_pose_goal_input_ = false;
+    bool tp_pose_target_initialized_ = false;
     bool qp_enabled_        = false;
     std::atomic<bool> emergency_stop_active_{false};
     geometry_msgs::msg::PoseStamped base_pose_;
@@ -266,6 +284,7 @@ private:
     // ROS I/O
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr sub_js_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_twist_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr sub_pose_goal_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_arm_vel_;
     rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr sub_obstacles_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_cmd_vel_;
@@ -292,6 +311,9 @@ private:
     std::vector<Eigen::Vector3d> obstacle_points_world_;
     std::string obstacle_points_frame_;
     mutable std::mutex obstacle_points_mtx_;
+    tp_control::Pose6D tp_pose_goal_input_;
+    tp_control::Pose6D tp_pose_goal_target_;
+    mutable std::mutex tp_pose_goal_mtx_;
     DebugInputs dbg_;
     std::mutex dbg_mtx_;
     using ParamCbHandle = rclcpp::node_interfaces::OnSetParametersCallbackHandle;

@@ -111,6 +111,39 @@ Eigen::Matrix3d rotationWN(double yaw)
     return R;
 }
 
+tp_control::Pose6D poseMsgToTpPose(const geometry_msgs::msg::Pose& msg)
+{
+    tp_control::Pose6D out;
+    out.p << msg.position.x, msg.position.y, msg.position.z;
+
+    Eigen::Quaterniond q(msg.orientation.w,
+                         msg.orientation.x,
+                         msg.orientation.y,
+                         msg.orientation.z);
+    if (q.norm() < 1.0e-12)
+    {
+        out.R = Eigen::Matrix3d::Identity();
+    }
+    else
+    {
+        out.R = q.normalized().toRotationMatrix();
+    }
+    return out;
+}
+
+Eigen::Matrix3d integrateRotationExpMap(const Eigen::Matrix3d& R,
+                                        const Eigen::Vector3d& omega,
+                                        double dt)
+{
+    const double angle = omega.norm() * dt;
+    if (angle < 1.0e-12)
+    {
+        return R;
+    }
+    const Eigen::Vector3d axis = omega.normalized();
+    return R * Eigen::AngleAxisd(angle, axis).toRotationMatrix();
+}
+
 Eigen::Matrix4d dhTransform(const MobileManipulatorKinematics::DHParam& dh, double q)
 {
     const double cq = std::cos(q);
@@ -705,6 +738,11 @@ WbqpControllerNode::WbqpControllerNode(const rclcpp::NodeOptions & options)
     sub_twist_ = this->create_subscription<geometry_msgs::msg::Twist>(
         topic_twist_cmd_, 1, std::bind(&WbqpControllerNode::twistCmdCb, this, std::placeholders::_1), sub_options);
 
+    auto cb_group_sub_pose_goal = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    sub_options.callback_group = cb_group_sub_pose_goal;
+    sub_pose_goal_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+        topic_tcp_pose_goal_, 1, std::bind(&WbqpControllerNode::poseGoalCb, this, std::placeholders::_1), sub_options);
+
     auto cb_group_sub_arm_vel = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     sub_options.callback_group = cb_group_sub_arm_vel;
     sub_arm_vel_ = this->create_subscription<geometry_msgs::msg::Twist>(
@@ -762,6 +800,7 @@ void WbqpControllerNode::check_params()
   this->declare_parameter("topics.q_speed",     "/manipulator/js_cmd_vel");
   this->declare_parameter("topics.arm_vel",     "/manipulator/cmd_vel");
   this->declare_parameter("topics.arm_vel_cmd", "/manipulator/cmd_vel");
+  this->declare_parameter("topics.tcp_pose_goal", "/mobile_manipulator/tcp_pose_goal");
   this->declare_parameter("topics.obstacle_points", "/mobile_manipulator/obstacle_points");
   this->declare_parameter("topics.emergency_state", "/mobile_platform/emergency_stop_active");
   this->declare_parameter("services.emergency_stop", "/mobile_platform/emergency_stop");
@@ -773,6 +812,7 @@ void WbqpControllerNode::check_params()
   topic_q_speed_     = this->get_parameter("topics.q_speed").as_string();
   topic_arm_vel_     = this->get_parameter("topics.arm_vel").as_string();
   topic_arm_vel_cmd_ = this->get_parameter("topics.arm_vel_cmd").as_string();
+  topic_tcp_pose_goal_ = this->get_parameter("topics.tcp_pose_goal").as_string();
   topic_obstacle_points_ = this->get_parameter("topics.obstacle_points").as_string();
   topic_emergency_state_ = this->get_parameter("topics.emergency_state").as_string();
   emergency_stop_service_name_ = this->get_parameter("services.emergency_stop").as_string();
@@ -892,6 +932,8 @@ void WbqpControllerNode::check_params()
   this->declare_parameter("tp.tracking.kp", std::vector<double>{2,2,2,2,2,2});
   this->declare_parameter("tp.tracking.ki", std::vector<double>{0,0,0,0,0,0});
   this->declare_parameter("tp.tracking.v_limit", std::vector<double>{1,1,1,1,1,1});
+  this->declare_parameter<std::string>("tp.mode", "speed");
+  this->declare_parameter<std::string>("tp.pose_sub_mode", "increment");
   {
     const auto kp = this->get_parameter("tp.tracking.kp").as_double_array();
     const auto ki = this->get_parameter("tp.tracking.ki").as_double_array();
@@ -901,6 +943,40 @@ void WbqpControllerNode::check_params()
       tp_tracking_kp_[i] = (i < static_cast<int>(kp.size())) ? kp[i] : 2.0;
       tp_tracking_ki_[i] = (i < static_cast<int>(ki.size())) ? ki[i] : 0.0;
       tp_tracking_v_limit_[i] = (i < static_cast<int>(v_limit.size())) ? v_limit[i] : 1.0;
+    }
+  }
+  {
+    std::string tp_mode = toLower(this->get_parameter("tp.mode").as_string());
+    std::string tp_pose_sub_mode = toLower(this->get_parameter("tp.pose_sub_mode").as_string());
+
+    if (tp_mode == "pose")
+    {
+      tp_tracking_mode_ = TpTrackingMode::POSE;
+    }
+    else
+    {
+      if (tp_mode != "speed")
+      {
+        RCLCPP_WARN(this->get_logger(),
+                    "Unknown tp.mode '%s'. Falling back to 'speed'.",
+                    tp_mode.c_str());
+      }
+      tp_tracking_mode_ = TpTrackingMode::SPEED;
+    }
+
+    if (tp_pose_sub_mode == "input")
+    {
+      tp_pose_sub_mode_ = TpPoseSubMode::INPUT;
+    }
+    else
+    {
+      if (tp_pose_sub_mode != "increment")
+      {
+        RCLCPP_WARN(this->get_logger(),
+                    "Unknown tp.pose_sub_mode '%s'. Falling back to 'increment'.",
+                    tp_pose_sub_mode.c_str());
+      }
+      tp_pose_sub_mode_ = TpPoseSubMode::INCREMENT;
     }
   }
 
@@ -1073,6 +1149,7 @@ void WbqpControllerNode::print_params(const struct10_T &cfg)
     RCLCPP_INFO(this->get_logger(), "  twist_cmd   : %s", topic_twist_cmd_.c_str());
     RCLCPP_INFO(this->get_logger(), "  cmd_vel     : %s", topic_cmd_vel_.c_str());
     RCLCPP_INFO(this->get_logger(), "  q_speed     : %s", topic_q_speed_.c_str());
+    RCLCPP_INFO(this->get_logger(), "  tcp_pose_goal: %s", topic_tcp_pose_goal_.c_str());
     RCLCPP_INFO(this->get_logger(), "  emergency srv: %s", emergency_stop_service_name_.c_str());
     RCLCPP_INFO(this->get_logger(), "Control dt = %.4f", dt_);
 
@@ -1156,6 +1233,10 @@ void WbqpControllerNode::print_params(const struct10_T &cfg)
     RCLCPP_INFO(this->get_logger(), "  tracking.v_limit   = [%.3f %.3f %.3f %.3f %.3f %.3f]",
                 tp_tracking_v_limit_[0], tp_tracking_v_limit_[1], tp_tracking_v_limit_[2],
                 tp_tracking_v_limit_[3], tp_tracking_v_limit_[4], tp_tracking_v_limit_[5]);
+    RCLCPP_INFO(this->get_logger(), "  mode               = %s",
+                (tp_tracking_mode_ == TpTrackingMode::POSE) ? "pose" : "speed");
+    RCLCPP_INFO(this->get_logger(), "  pose_sub_mode      = %s",
+                (tp_pose_sub_mode_ == TpPoseSubMode::INPUT) ? "input" : "increment");
     RCLCPP_INFO(this->get_logger(), "  singularity.enable = %s", tp_singularity_enable_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "  singularity.method = %s", tp_singularity_method_.c_str());
     RCLCPP_INFO(this->get_logger(), "  collision.enable   = %s", tp_collision_enable_ ? "true" : "false");
@@ -1180,7 +1261,15 @@ bool WbqpControllerNode::loopStep()
     if (mode_ == Mode::RUN)
     {
         const bool controller_ready = tp_method_ ? static_cast<bool>(tp_controller_) : qp_initialized_;
-        if (!controller_ready || !have_js_ || !have_twist_ || !qp_enabled_)
+        bool command_ready = have_twist_;
+        if (tp_method_ &&
+            tp_tracking_mode_ == TpTrackingMode::POSE &&
+            tp_pose_sub_mode_ == TpPoseSubMode::INPUT)
+        {
+            command_ready = have_pose_goal_input_;
+        }
+
+        if (!controller_ready || !have_js_ || !command_ready || !qp_enabled_)
         {
             base_pose_.header.stamp   = this->get_clock()->now();
             map_base_tf_.header.stamp = base_pose_.header.stamp;
@@ -1358,6 +1447,16 @@ void WbqpControllerNode::twistCmdCb(const geometry_msgs::msg::Twist::SharedPtr m
     have_twist_ = true;
 }
 
+void WbqpControllerNode::poseGoalCb(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+{
+    const auto goal = poseMsgToTpPose(msg->pose);
+    {
+        std::lock_guard<std::mutex> lock(tp_pose_goal_mtx_);
+        tp_pose_goal_input_ = goal;
+    }
+    have_pose_goal_input_ = true;
+}
+
 void WbqpControllerNode::armVelCb(const geometry_msgs::msg::Twist::SharedPtr msg)
 {
     arm_vel_[0]=msg->linear.x;  arm_vel_[1]=msg->linear.y;  arm_vel_[2]=msg->linear.z;
@@ -1420,9 +1519,17 @@ void WbqpControllerNode::fillCfgStruct(struct10_T &cfg)
     this->declare_parameter("qp.max_dotq",   1.0);
     this->declare_parameter("qp.max_V",      0.5);
     this->declare_parameter("qp.max_Omegaz", 0.5);
-    this->declare_parameter("qp.qddot_max",  2.0);
-    this->declare_parameter("qp.a_lin_max",  1.0);
-    this->declare_parameter("qp.alpha_max",  1.0);
+    // Legacy location (limits.*) kept for backward compatibility.
+    this->declare_parameter("limits.qddot_max", 2.0);
+    this->declare_parameter("limits.a_lin_max", 1.0);
+    this->declare_parameter("limits.alpha_max", 1.0);
+    const double legacy_qddot_max = this->get_parameter("limits.qddot_max").as_double();
+    const double legacy_a_lin_max = this->get_parameter("limits.a_lin_max").as_double();
+    const double legacy_alpha_max = this->get_parameter("limits.alpha_max").as_double();
+
+    this->declare_parameter("qp.qddot_max",  legacy_qddot_max);
+    this->declare_parameter("qp.a_lin_max",  legacy_a_lin_max);
+    this->declare_parameter("qp.alpha_max",  legacy_alpha_max);
 
     cfg.beta_arm   = this->get_parameter("qp.beta_arm").as_double();
     cfg.alpha_xy   = this->get_parameter("qp.alpha_xy").as_double();
@@ -1987,10 +2094,39 @@ void WbqpControllerNode::solve_tp(double x_opt[9])
     }
 
     tp_control::CommandInputs cmd;
-    cmd.mode = tp_control::CommandInputs::Mode::Speed;
-    for (int i = 0; i < 6; ++i)
+    if (tp_tracking_mode_ == TpTrackingMode::POSE)
     {
-        cmd.ee_twist_cmd.v(i) = u_star_[i];
+        cmd.mode = tp_control::CommandInputs::Mode::Pose;
+
+        const tp_control::Pose6D current_pose = computeCurrentEePoseTp(state);
+        if (!tp_pose_target_initialized_)
+        {
+            tp_pose_goal_target_ = current_pose;
+            tp_pose_target_initialized_ = true;
+        }
+
+        if (tp_pose_sub_mode_ == TpPoseSubMode::INPUT)
+        {
+            std::lock_guard<std::mutex> lock(tp_pose_goal_mtx_);
+            tp_pose_goal_target_ = tp_pose_goal_input_;
+        }
+        else
+        {
+            const Eigen::Vector3d v_linear(u_star_[0], u_star_[1], u_star_[2]);
+            const Eigen::Vector3d v_angular(u_star_[3], u_star_[4], u_star_[5]);
+            tp_pose_goal_target_.p += v_linear * dt_;
+            tp_pose_goal_target_.R = integrateRotationExpMap(tp_pose_goal_target_.R, v_angular, dt_);
+        }
+
+        cmd.ee_pose_target = tp_pose_goal_target_;
+    }
+    else
+    {
+        cmd.mode = tp_control::CommandInputs::Mode::Speed;
+        for (int i = 0; i < 6; ++i)
+        {
+            cmd.ee_twist_cmd.v(i) = u_star_[i];
+        }
     }
 
     tp_control::Output out;
@@ -2020,6 +2156,34 @@ void WbqpControllerNode::solve_tp(double x_opt[9])
     x_opt[6] = out.dq_cmd(0);
     x_opt[7] = out.dq_cmd(1);
     x_opt[8] = out.dq_cmd(2);
+}
+
+tp_control::Pose6D WbqpControllerNode::computeCurrentEePoseTp(const tp_control::RobotState& state) const
+{
+    const Eigen::Matrix<double, 6, 1> q_arm = state.q.segment<6>(3);
+
+    Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
+    if (!use_jac_ros2_)
+    {
+        T = kin_.forwardKinematicsNC(q_arm);
+    }
+    else if (jac_to_world_)
+    {
+        MobileManipulatorKinematics::BasePose2D base_pose;
+        base_pose.px = state.q(0);
+        base_pose.py = state.q(1);
+        base_pose.yaw = state.q(2);
+        T = kin_.forwardKinematicsWC(q_arm, base_pose);
+    }
+    else
+    {
+        T = kin_.forwardKinematicsNC(q_arm);
+    }
+
+    tp_control::Pose6D out;
+    out.p = T.block<3,1>(0,3);
+    out.R = T.block<3,3>(0,0);
+    return out;
 }
 
 // ----------------- MOBILE BASE ODOMETRY ----------------------- //

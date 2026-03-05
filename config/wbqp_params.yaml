@@ -20,6 +20,7 @@
       q_speed:     "/manipulator/js_cmd_vel"      # joint speed command topic for the manipulator (output)
       arm_vel:     "/manipulator/cmd_vel"         # arm twist sensing topic (input), default kept as cmd_vel
       arm_vel_cmd: "/manipulator/cmd_vel"         # arm twist command topic computed from joint speeds (output)
+      tcp_pose_goal: "/mobile_manipulator/tcp_pose_goal" # TP pose target input (used when tp.mode=pose and tp.pose_sub_mode=input)
       obstacle_points: "/mobile_manipulator/obstacle_points" # PoseArray of obstacle points for collision layers (expected in map/world frame)
       emergency_state: "/mobile_platform/emergency_stop_active" # published emergency latch state (true/false)
     services:
@@ -42,12 +43,12 @@
       w_ang: 1.0                                  # weight for the angular velocity tracking (set to 0.0 if no orientation constraints)
       nu: 0.001                                   # weight for the slack variable (soft constraint for twist tracking)
       max_dotq: 1.0                               # maximum joint speed (rad/s)
-      max_V: 0.2                                  # maximum linear velocity of the mobile base (m/s)
-      max_Omegaz: 0.2                             # maximum angular velocity of the mobile base (rad/s)
+      max_V: 0.5                                  # maximum linear velocity of the mobile base (m/s)
+      max_Omegaz: 1.0                             # maximum angular velocity of the mobile base (rad/s)
       
       # QP-only singularity handling
       singularity:
-        enable: false                             # true => limit arm command to keep singularity metric above threshold
+        enable: true                              # true => limit arm command to keep singularity metric above threshold
         min_threshold: 1.0e-4                     # minimum admissible singularity metric
         method: "yoshikawa"                       # "det" or "yoshikawa"
 
@@ -67,7 +68,7 @@
 
       # QP-only TCP z hard guard in arm-base frame B
       tcp_z_guard:
-        enable: false                             # add hard inequality z_tcp_B >= z_min
+        enable: true                             # add hard inequality z_tcp_B >= z_min
         z_min: 0.03                               # minimum TCP height [m] in arm-base frame B
 
     # CONSTRAINTS
@@ -82,16 +83,19 @@
       qmax: [ 90.0,  -85.0,    0.0,   90.0, 110.0,  180.0]  # max boundaries [deg]
       
       qddot_max: 2.0                              # maximum joint acceleration (rad/s^2)
-      a_lin_max: 1.0                              # maximum linear acceleration (m/s^2)
-      alpha_max: 1.0                              # maximum angular acceleration (rad/s^2)
+      a_lin_max: 2.0                              # maximum linear acceleration (m/s^2) of the mobile base
+      alpha_max: 2.0                              # maximum angular acceleration (rad/s^2) of the mobile base
 
     # JACOBIAN SETUP FOR QP METHOD
     jacobian:
-      use_jac_ros2: false                         # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian
-      jac_to_world: false                         # true => world-frame Jacobian; false => body-frame Jacobian; only relevant if use_jac_ros2 is true (no MATLAB codegen)
+      use_jac_ros2: true                          # true => use C++ Jacobian from wb_jac; false => use MATLAB codegen WholeBodyJacobian
+      jac_to_world: true                          # true => world-frame Jacobian; false => body-frame Jacobian, bad tracking (unsuggested); only relevant if use_jac_ros2 is true (no MATLAB codegen)
 
     # TP-specific tuning (used when tp_method=true). If omitted, sensible defaults are used.
     tp:
+      mode: "speed"                               # "speed" (track ee twist) | "pose" (PI pose tracking via TP TrackingTask, it is very unstable)
+      pose_sub_mode: "increment"                  # used only when tp.mode=pose: "increment" integrates twist input into pose goal; "input" uses topics.tcp_pose_goal directly and ignores twist
+
       solver:
         lambda: 1.0e-4                            # damping in the damped pseudoinverse; larger => more robust, less reactive
         pinv_method: "svd"                        # "svd" (more robust near singularities) or "ldlt" (faster normal-equation solve)
@@ -105,16 +109,22 @@
 
       tracking:
         kp: [2.0, 2.0, 2.0, 2.0, 2.0, 2.0]        # pose-mode proportional gains [x y z roll pitch yaw]
-        ki: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]        # pose-mode integral gains [x y z roll pitch yaw]
-        v_limit: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]   # task-space speed clamp [m/s, m/s, m/s, rad/s, rad/s, rad/s]; applied in TP tracking task
+        ki: [0.2, 0.2, 0.2, 0.2, 0.2, 0.2]        # pose-mode integral gains [x y z roll pitch yaw]
+        v_limit: [1.0, 1.0, 1.0, 2.0, 2.0, 2.0]   # task-space speed clamp [m/s, m/s, m/s, rad/s, rad/s, rad/s]; applied in TP tracking task
 
       joint_limits:
         k: 2.0                                    # repulsive action gain near limits (how strongly joints are pushed back)
         d_act: 0.2                                # activation distance from the protected bound [rad]
         margin: 0.05                              # protected inner safety margin from qmin/qmax [rad]
 
+      tcp_z_guard:
+        enable: true                              # enable TP TCP z guard task
+        z_min: 0.03                               # minimum TCP height [m] in arm-base frame B
+        z_act: 0.06                               # activation height [m]; no TP action above this value
+        k: 2.0                                    # recovery gain when below z_act
+
       singularity:
-        enable: false                             # enable TP singularity task
+        enable: true                              # enable TP singularity task
         method: "yoshikawa"                       # "yoshikawa" => sqrt(det(JJ^T)), "det" => |det(J)| on arm Jacobian
         mu_min: 1.0e-4                            # fully active below this manipulability value
         mu_max: 1.25e-4                           # deactivated above this value (smooth transition between mu_min and mu_max)
@@ -123,7 +133,7 @@
         fd_eps: 1.0e-4                            # finite-difference joint perturbation [rad] for gradient estimation
 
       collision:
-        enable: false                             # enable TP collision task
+        enable: true                             # enable TP collision task
         use_closest_obstacle: true                # true => one nearest obstacle per robot point; false => all robot-obstacle pairs (still capped by max_constraints)
         d_safe: 0.15                              # desired minimum robot-obstacle distance [m]
         d_act: 0.30                               # activation distance [m]; constraints activate when distance < d_act
@@ -137,12 +147,6 @@
         include_tcp: true                         # include TCP point ONLY if tcp_offset translation is non-zero
         samples_per_link: 0                       # extra interior points per link segment (0 => only segment endpoints)
         robot_points: [0, 1]                      # legacy key, ignored now (point set is auto-generated from fields above)
-
-      tcp_z_guard:
-        enable: false                             # enable TP TCP z guard task
-        z_min: 0.03                               # minimum TCP height [m] in arm-base frame B
-        z_act: 0.06                               # activation height [m]; no TP action above this value
-        k: 2.0                                    # recovery gain when below z_act
 
     kinematics:
       P_N2B:     [0.187, 0.0, 0.22]               # offset of manipulator base link in the mobile base frame (x,y,z)
