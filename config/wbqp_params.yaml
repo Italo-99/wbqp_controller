@@ -156,10 +156,13 @@
       dh:
         joint1: { a:  0.0,     d:  0.1625, alpha:  1.5707963 }   # pi/2 or 0.0 depending on the convention for the first joint (rotation around z)
         joint2: { a: -0.425,   d:  0.0,    alpha:  0.0       }
-        joint3: { a: -0.3922,  d:  0.0,    alpha:  0.0       }
+        joint3: { a: -0.39225, d:  0.0,    alpha:  0.0       }
         joint4: { a:  0.0,     d:  0.1333, alpha:  1.5707963 }   # pi/2
         joint5: { a:  0.0,     d:  0.0997, alpha: -1.5707963 }   # -pi/2
         joint6: { a:  0.0,     d:  0.0996, alpha:  0.0       }
+
+    # CONNETTERSI AL VERO ROBOT (OVERRIDE THESE FOR REAL-ROBOT DEPLOYMENT)
+    # DOT calibration: urcontrol.config (connect with ur robot with ftp) -> chiedere a 32
 
       # TCP offset after the last DH frame (translation tx,ty,tz in m; rotation rx,ry,rz in rad, applied as Rz*Ry*Rx)
       tcp_offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
